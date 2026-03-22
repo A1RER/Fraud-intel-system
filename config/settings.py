@@ -129,5 +129,12 @@ CONFIDENCE_DECAY_HOURS = 72    # 情报超过 72h 开始衰减
 CONFIDENCE_MIN         = 0.5   # 最低置信度系数
 
 # ─── Gemini AI 配置 ─────────────────────────────────────────────
+# 优先读 .env / 环境变量，其次读 Streamlit Cloud Secrets
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+if not GEMINI_API_KEY:
+    try:
+        import streamlit as st
+        GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+    except Exception:
+        pass
 GEMINI_MODEL   = "gemini-2.5-flash"      # 速度快、支持视觉、成本低
