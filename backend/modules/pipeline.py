@@ -3,6 +3,7 @@
 情报分析流水线主控器
 采集 -> 特征提取 -> WRAS评分 -> 决策输出
 """
+import os
 import uuid
 import time
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ from backend.modules.wras_engine import WRASEngine
 from backend.modules.gemini_analyzer import (
     GeminiContentAnalyzer, GeminiVisionAnalyzer, GeminiReportGenerator
 )
-from config.settings import DISPOSAL_PLANS, GEMINI_API_KEY
+from config.settings import DISPOSAL_PLANS, GEMINI_MODEL
 
 
 class AnalysisPipeline:
@@ -39,13 +40,16 @@ class AnalysisPipeline:
         logger.info(f"[PIPELINE] 开始分析 | report_id={report_id} | url={request.url}")
         
         try:
+            # 运行时读取 API Key（避免模块缓存导致空值）
+            gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+
             # 阶段一：OSINT 采集
             logger.info("[PIPELINE] 阶段1/5: OSINT 情报采集")
             raw_intel = await OSINTCollector.collect(request.url)
 
             # 阶段二：Gemini AI 内容 + 视觉分析（结果融入特征工程）
             content_result, vision_result = {}, {}
-            if GEMINI_API_KEY:
+            if gemini_api_key:
                 logger.info("[PIPELINE] 阶段2/5: Gemini AI 内容与视觉分析")
                 try:
                     content_result = GeminiContentAnalyzer.analyze(
@@ -85,7 +89,7 @@ class AnalysisPipeline:
 
             gemini_result = None
             ai_start = time.time()
-            if GEMINI_API_KEY:
+            if gemini_api_key:
                 try:
                     report_context = {
                         "url": request.url,

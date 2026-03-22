@@ -13,7 +13,8 @@ import base64
 from typing import Optional, Dict
 from loguru import logger
 
-from config.settings import GEMINI_API_KEY, GEMINI_MODEL
+import os
+from config.settings import GEMINI_MODEL
 
 try:
     from google import genai
@@ -24,13 +25,19 @@ except ImportError:
     logger.warning("google-genai 未安装，AI 分析功能不可用")
 
 
+def _get_api_key():
+    """运行时读取 API Key"""
+    return os.getenv("GEMINI_API_KEY", "")
+
+
 def _get_client():
     """获取 Gemini 客户端"""
     if not GEMINI_AVAILABLE:
         raise RuntimeError("google-genai 未安装")
-    if not GEMINI_API_KEY:
+    api_key = _get_api_key()
+    if not api_key:
         raise RuntimeError("GEMINI_API_KEY 未配置")
-    return genai.Client(api_key=GEMINI_API_KEY)
+    return genai.Client(api_key=api_key)
 
 
 class GeminiContentAnalyzer:
@@ -60,7 +67,7 @@ class GeminiContentAnalyzer:
     def analyze(cls, page_text: str, page_title: str = "") -> Dict:
         default = {"risk_score": 0.0, "fraud_types": [], "key_evidence": [], "reasoning": "AI 分析未执行"}
 
-        if not page_text or not GEMINI_AVAILABLE or not GEMINI_API_KEY:
+        if not page_text or not GEMINI_AVAILABLE or not _get_api_key():
             return default
 
         text_input = page_text[:8000]
@@ -122,7 +129,7 @@ class GeminiVisionAnalyzer:
         default = {"visual_risk_score": 0.0, "is_phishing": False, "impersonates": None,
                     "visual_features": [], "description": "AI 视觉分析未执行"}
 
-        if not screenshot_b64 or not GEMINI_AVAILABLE or not GEMINI_API_KEY:
+        if not screenshot_b64 or not GEMINI_AVAILABLE or not _get_api_key():
             return default
 
         try:
@@ -190,7 +197,7 @@ class GeminiReportGenerator:
 
     @classmethod
     def generate(cls, context: Dict) -> str:
-        if not GEMINI_AVAILABLE or not GEMINI_API_KEY:
+        if not GEMINI_AVAILABLE or not _get_api_key():
             return "⚠️ Gemini AI 未配置，无法生成 AI 报告。"
 
         intel_summary = f"""
