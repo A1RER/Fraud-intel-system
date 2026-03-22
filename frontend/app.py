@@ -98,6 +98,9 @@ if analyze_btn and url_input.strip():
         st.stop()
 
     report = result.report
+    if report is None:
+        st.error("❌ 报告数据为空")
+        st.stop()
     wras = report.wras
     intel = report.raw_intel
     feat = report.features
@@ -124,7 +127,7 @@ if analyze_btn and url_input.strip():
         "public_sentiment_neg":"负面舆情强度","complaint_count_norm":"投诉量归一化","blacklist_hit":"黑名单命中",
     }
 
-    gemini = report.gemini
+    gemini = getattr(report, "gemini", None)
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 风险热力图", "🔍 原始情报", "⚖️ 处置预案", "🤖 AI 智能分析", "📄 完整报告"])
 
     with tab1:
