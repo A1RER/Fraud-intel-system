@@ -1,0 +1,77 @@
+# --- Python bytecode / cache ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- C extensions ---
+*.so
+
+# --- Virtual environments ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- Packaging / build artifacts ---
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Test / type / lint caches ---
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.tox/
+.nox/
+
+# --- Coverage ---
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Logs & runtime artifacts ---
+*.log
+*.sqlite
+*.db
+
+# --- Secrets (keep only .env.example in repo) ---
+.env
+.env.*
+!.env.example
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+
+.idea/
+*.iml
+
+# --- Project data (avoid committing large/PII datasets) ---
+data/
+**/data/
+!data/samples/
+!data/samples/**
+
+# --- Data files (avoid committing large/PII datasets) ---
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.json.gz
+
+# --- ML model artifacts ---
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
