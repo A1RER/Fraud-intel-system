@@ -47,10 +47,11 @@ class AnalysisPipeline:
             logger.info("[PIPELINE] 阶段1/5: OSINT 情报采集")
             raw_intel = await OSINTCollector.collect(request.url)
 
-            # 阶段二：Gemini AI 内容 + 视觉分析（结果融入特征工程）
+            # 阶段二：AI 内容 + 视觉分析（结果融入特征工程）
             content_result, vision_result = {}, {}
-            if gemini_api_key:
-                logger.info("[PIPELINE] 阶段2/5: Gemini AI 内容与视觉分析")
+            deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "")
+            if gemini_api_key or deepseek_api_key:
+                logger.info("[PIPELINE] 阶段2/5: AI 内容与视觉分析")
                 try:
                     content_result = GeminiContentAnalyzer.analyze(
                         raw_intel.page_text or "", raw_intel.page_title or ""
@@ -89,7 +90,7 @@ class AnalysisPipeline:
 
             gemini_result = None
             ai_start = time.time()
-            if gemini_api_key:
+            if gemini_api_key or deepseek_api_key:
                 try:
                     report_context = {
                         "url": request.url,
@@ -116,10 +117,14 @@ class AnalysisPipeline:
                         "score_breakdown": wras_result.score_breakdown,
                         "feature_contrib": wras_result.feature_contrib,
                     }
-                    ai_report_text = GeminiReportGenerator.generate(report_context)
+                    ai_report_text, report_provider = GeminiReportGenerator.generate(report_context)
+
+                    # 确定实际使用的 AI 提供商
+                    content_provider = content_result.get("_provider", "")
+                    actual_provider = report_provider or content_provider or GEMINI_MODEL
 
                     gemini_result = GeminiAnalysis(
-                        model_name=GEMINI_MODEL,
+                        model_name=actual_provider,
                         ai_elapsed_s=round(time.time() - ai_start, 2),
                         content_risk_score=content_result.get("risk_score", 0.0),
                         fraud_types=content_result.get("fraud_types", []),
@@ -132,7 +137,7 @@ class AnalysisPipeline:
                         visual_description=vision_result.get("description", ""),
                         ai_report=ai_report_text,
                     )
-                    logger.success("[PIPELINE] Gemini AI 报告生成完成")
+                    logger.success(f"[PIPELINE] AI 报告生成完成 [{actual_provider}]")
                 except Exception as e:
                     logger.warning(f"[PIPELINE] AI 报告生成失败: {e}")
 

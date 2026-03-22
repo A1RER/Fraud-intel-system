@@ -138,3 +138,8 @@ if not GEMINI_API_KEY:
     except Exception:
         pass
 GEMINI_MODEL   = "gemini-2.5-flash"      # 速度快、支持视觉、成本低
+
+# ─── DeepSeek AI 配置（备选，Gemini 限流时自动切换）──────────
+DEEPSEEK_API_KEY  = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL    = "deepseek-chat"        # DeepSeek V3，中文极强

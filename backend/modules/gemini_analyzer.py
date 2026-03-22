@@ -1,50 +1,102 @@
 # backend/modules/gemini_analyzer.py
 """
-模块五：Gemini AI 智能分析
-接入 Google AI Studio (Gemini) 实现：
-1. 页面内容语义风险分析（替代/增强关键词匹配）
-2. 截图视觉欺诈检测（替代 pHash）
-3. AI 侦查报告生成
-
-使用新版 google-genai SDK
+模块五：AI 智能分析
+支持双引擎：Gemini（主） + DeepSeek（备选）
+- Gemini 限流 / 不可用时自动切换 DeepSeek
+- 视觉分析仅 Gemini 支持
 """
+import os
 import json
 import base64
-from typing import Optional, Dict
+from typing import Dict
 from loguru import logger
 
-import os
-from config.settings import GEMINI_MODEL
+from config.settings import GEMINI_MODEL, DEEPSEEK_MODEL, DEEPSEEK_BASE_URL
 
+# ── SDK 可用性检测 ────────────────────────────────────────────
 try:
     from google import genai
-    from google.genai import types
+    from google.genai import types as gemini_types
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
-    logger.warning("google-genai 未安装，AI 分析功能不可用")
+
+try:
+    from openai import OpenAI
+    DEEPSEEK_AVAILABLE = True
+except ImportError:
+    DEEPSEEK_AVAILABLE = False
 
 
-def _get_api_key():
-    """运行时读取 API Key"""
+# ── 客户端工厂 ────────────────────────────────────────────────
+def _gemini_key():
     return os.getenv("GEMINI_API_KEY", "")
 
+def _deepseek_key():
+    return os.getenv("DEEPSEEK_API_KEY", "")
 
-def _get_client():
-    """获取 Gemini 客户端"""
-    if not GEMINI_AVAILABLE:
-        raise RuntimeError("google-genai 未安装")
-    api_key = _get_api_key()
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY 未配置")
-    return genai.Client(api_key=api_key)
+def _get_gemini():
+    return genai.Client(api_key=_gemini_key())
+
+def _get_deepseek():
+    return OpenAI(api_key=_deepseek_key(), base_url=DEEPSEEK_BASE_URL)
 
 
+# ── 统一文本生成（Gemini 优先，DeepSeek 备选）─────────────────
+def _call_llm(prompt: str, max_tokens: int = 1024, temperature: float = 0.1) -> tuple:
+    """
+    返回 (response_text, provider_name)
+    优先 Gemini，失败则 DeepSeek
+    """
+    # 尝试 Gemini
+    if GEMINI_AVAILABLE and _gemini_key():
+        try:
+            client = _get_gemini()
+            resp = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=gemini_types.GenerateContentConfig(
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                ),
+            )
+            text = resp.text
+            if text:
+                return text.strip(), f"Gemini ({GEMINI_MODEL})"
+        except Exception as e:
+            logger.warning(f"[AI] Gemini 调用失败，切换 DeepSeek: {e}")
+
+    # 备选 DeepSeek
+    if DEEPSEEK_AVAILABLE and _deepseek_key():
+        try:
+            client = _get_deepseek()
+            resp = client.chat.completions.create(
+                model=DEEPSEEK_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            text = resp.choices[0].message.content
+            if text:
+                return text.strip(), f"DeepSeek ({DEEPSEEK_MODEL})"
+        except Exception as e:
+            logger.error(f"[AI] DeepSeek 调用也失败: {e}")
+
+    raise RuntimeError("Gemini 和 DeepSeek 均不可用")
+
+
+def _parse_json(raw: str) -> dict:
+    """从 LLM 回复中提取 JSON"""
+    if "```json" in raw:
+        raw = raw.split("```json")[1].split("```")[0].strip()
+    elif "```" in raw:
+        raw = raw.split("```")[1].split("```")[0].strip()
+    return json.loads(raw)
+
+
+# ── 内容语义分析 ──────────────────────────────────────────────
 class GeminiContentAnalyzer:
-    """
-    使用 Gemini 对页面文本进行语义级欺诈检测
-    相比关键词匹配：能理解上下文、识别变体话术、降低误报
-    """
+    """页面文本语义级欺诈检测（双引擎）"""
 
     SYSTEM_PROMPT = """你是一个专业的网络欺诈检测引擎。给定一个网站的页面文本，你需要分析其是否包含欺诈/诈骗内容。
 
@@ -66,47 +118,31 @@ class GeminiContentAnalyzer:
     @classmethod
     def analyze(cls, page_text: str, page_title: str = "") -> Dict:
         if not page_text:
-            return {"risk_score": 0.0, "fraud_types": [], "key_evidence": [], "reasoning": "未采集到页面文本，跳过内容分析"}
-        if not GEMINI_AVAILABLE or not _get_api_key():
-            return {"risk_score": 0.0, "fraud_types": [], "key_evidence": [], "reasoning": "Gemini AI 未配置"}
-
-            return default
+            return {"risk_score": 0.0, "fraud_types": [], "key_evidence": [],
+                    "reasoning": "未采集到页面文本，跳过内容分析", "_provider": ""}
 
         text_input = page_text[:8000]
         if page_title:
             text_input = f"[网站标题] {page_title}\n\n[页面正文]\n{text_input}"
 
         try:
-            client = _get_client()
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=f"{cls.SYSTEM_PROMPT}\n\n请分析以下网站文本：\n\n{text_input}",
-                config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    max_output_tokens=1024,
-                ),
+            raw, provider = _call_llm(
+                f"{cls.SYSTEM_PROMPT}\n\n请分析以下网站文本：\n\n{text_input}"
             )
-            raw = response.text.strip()
-            if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw:
-                raw = raw.split("```")[1].split("```")[0].strip()
-
-            result = json.loads(raw)
+            result = _parse_json(raw)
             result["risk_score"] = max(0.0, min(1.0, float(result.get("risk_score", 0.0))))
-            logger.info(f"[GEMINI] 内容分析完成: risk_score={result['risk_score']:.2f}")
+            result["_provider"] = provider
+            logger.info(f"[AI] 内容分析完成 [{provider}]: risk_score={result['risk_score']:.2f}")
             return result
-
         except Exception as e:
-            logger.error(f"[GEMINI] 内容分析失败: {e}")
-            return default
+            logger.error(f"[AI] 内容分析失败: {e}")
+            return {"risk_score": 0.0, "fraud_types": [], "key_evidence": [],
+                    "reasoning": f"AI 分析失败：{e}", "_provider": ""}
 
 
+# ── 视觉分析（仅 Gemini，DeepSeek 不支持）────────────────────
 class GeminiVisionAnalyzer:
-    """
-    使用 Gemini Vision 分析网站截图
-    识别：仿冒官方机构、钓鱼页面、赌博界面、虚假投资平台 UI 特征
-    """
+    """网站截图视觉欺诈检测（仅 Gemini）"""
 
     VISION_PROMPT = """你是一个专业的网站视觉欺诈检测引擎。请分析这张网站截图，判断它是否可能是欺诈/钓鱼网站。
 
@@ -131,43 +167,35 @@ class GeminiVisionAnalyzer:
         default = {"visual_risk_score": 0.0, "is_phishing": False, "impersonates": None,
                     "visual_features": [], "description": "AI 视觉分析未执行"}
 
-        if not screenshot_b64 or not GEMINI_AVAILABLE or not _get_api_key():
+        if not screenshot_b64 or not GEMINI_AVAILABLE or not _gemini_key():
             return default
 
         try:
-            client = _get_client()
+            client = _get_gemini()
             image_bytes = base64.b64decode(screenshot_b64)
-            image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+            image_part = gemini_types.Part.from_bytes(data=image_bytes, mime_type="image/png")
 
-            response = client.models.generate_content(
+            resp = client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=[cls.VISION_PROMPT, image_part],
-                config=types.GenerateContentConfig(
+                config=gemini_types.GenerateContentConfig(
                     temperature=0.1,
                     max_output_tokens=1024,
                 ),
             )
-            raw = response.text.strip()
-            if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw:
-                raw = raw.split("```")[1].split("```")[0].strip()
-
-            result = json.loads(raw)
+            raw = resp.text.strip()
+            result = _parse_json(raw)
             result["visual_risk_score"] = max(0.0, min(1.0, float(result.get("visual_risk_score", 0.0))))
-            logger.info(f"[GEMINI] 视觉分析完成: risk={result['visual_risk_score']:.2f}")
+            logger.info(f"[AI] 视觉分析完成: risk={result['visual_risk_score']:.2f}")
             return result
-
         except Exception as e:
-            logger.error(f"[GEMINI] 视觉分析失败: {e}")
+            logger.error(f"[AI] 视觉分析失败: {e}")
             return default
 
 
+# ── AI 侦查报告生成（双引擎）─────────────────────────────────
 class GeminiReportGenerator:
-    """
-    使用 Gemini 生成结构化 AI 侦查报告
-    汇总所有采集数据和评分，输出专业的中文分析报告
-    """
+    """AI 侦查报告（双引擎）"""
 
     REPORT_PROMPT = """你是一名资深网络犯罪侦查分析师。根据以下情报数据，撰写一份专业的涉诈网站侦查分析报告。
 
@@ -198,10 +226,8 @@ class GeminiReportGenerator:
 针对当前风险等级给出具体的下一步行动建议"""
 
     @classmethod
-    def generate(cls, context: Dict) -> str:
-        if not GEMINI_AVAILABLE or not _get_api_key():
-            return "⚠️ Gemini AI 未配置，无法生成 AI 报告。"
-
+    def generate(cls, context: Dict) -> tuple:
+        """返回 (report_text, provider_name)"""
         intel_summary = f"""
 【目标网址】{context.get('url', '未知')}
 【域名】{context.get('domain', '未知')}
@@ -233,21 +259,13 @@ class GeminiReportGenerator:
 【主要风险因子贡献】
 {chr(10).join(f'  - {k}: {v:.2f}分' for k, v in sorted(context.get('feature_contrib', {}).items(), key=lambda x: x[1], reverse=True)[:6])}
 """
-
         try:
-            client = _get_client()
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=f"{cls.REPORT_PROMPT}\n\n以下是本次分析的情报数据：\n{intel_summary}",
-                config=types.GenerateContentConfig(
-                    temperature=0.3,
-                    max_output_tokens=2048,
-                ),
+            report_text, provider = _call_llm(
+                f"{cls.REPORT_PROMPT}\n\n以下是本次分析的情报数据：\n{intel_summary}",
+                max_tokens=2048, temperature=0.3,
             )
-            report = response.text.strip()
-            logger.info("[GEMINI] AI 侦查报告生成完成")
-            return report
-
+            logger.info(f"[AI] 侦查报告生成完成 [{provider}]")
+            return report_text, provider
         except Exception as e:
-            logger.error(f"[GEMINI] 报告生成失败: {e}")
-            return f"⚠️ AI 报告生成失败：{e}"
+            logger.error(f"[AI] 报告生成失败: {e}")
+            return f"⚠️ AI 报告生成失败：{e}", ""
