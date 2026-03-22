@@ -12,6 +12,14 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Streamlit Cloud Secrets → 环境变量（云端部署必需）
+try:
+    for key in ["GEMINI_API_KEY"]:
+        if key not in os.environ and key in st.secrets:
+            os.environ[key] = st.secrets[key]
+except Exception:
+    pass
+
 st.set_page_config(
     page_title="涉诈网站智能研判系统",
     page_icon="🔍",
