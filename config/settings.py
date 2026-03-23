@@ -128,6 +128,21 @@ BLACKLIST_DOMAINS = {
 CONFIDENCE_DECAY_HOURS = 72    # 情报超过 72h 开始衰减
 CONFIDENCE_MIN         = 0.5   # 最低置信度系数
 
+# ─── CORS 允许来源 ─────────────────────────────────────────────
+# 默认允许本地 Streamlit 前端，生产环境通过环境变量 CORS_ORIGINS 覆盖（逗号分隔）
+CORS_ORIGINS: list = [
+    o.strip()
+    for o in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:8501,http://127.0.0.1:8501"
+    ).split(",")
+    if o.strip()
+]
+
+# ─── Redis 配置 ────────────────────────────────────────────────
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_TASK_TTL = 60 * 60 * 24   # 任务结果保留 24 小时后自动过期
+
 # ─── Gemini AI 配置 ─────────────────────────────────────────────
 # 优先读 .env / 环境变量，其次读 Streamlit Cloud Secrets
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")

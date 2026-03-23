@@ -5,6 +5,7 @@ pydantic
 python-dotenv
 beautifulsoup4
 loguru
+redis
 Pillow
 imagehash
 google-genai

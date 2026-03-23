@@ -116,6 +116,10 @@ if analyze_btn and url_input.strip():
             from backend.modules.pipeline import AnalysisPipeline
             from backend.models.schemas import AnalysisRequest
             request = AnalysisRequest(url=url_input.strip(), priority=priority, analyst_id=analyst_id or None, extra_keywords=extra_keywords, ai_engine=ai_engine)
+        except ValueError as e:
+            st.error(f"⚠️ 输入网址格式不正确：{e}")
+            st.stop()
+        try:
             pipeline = AnalysisPipeline()
             loop = asyncio.new_event_loop()
             result = loop.run_until_complete(pipeline.run(request))

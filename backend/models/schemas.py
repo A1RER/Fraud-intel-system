@@ -2,10 +2,20 @@
 """
 数据模型定义 —— 情报流各阶段的结构化载体
 """
-from pydantic import BaseModel, HttpUrl, Field
+import re
+from pydantic import BaseModel, HttpUrl, Field, field_validator
 from typing import Optional, Dict, List, Any
 from datetime import datetime
 from enum import Enum
+
+# 合法 URL 正则：支持 http(s):// 前缀或直接输入域名
+_URL_RE = re.compile(
+    r"^(https?://)?"                      # 可选协议
+    r"([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+"  # 域名
+    r"[a-zA-Z]{2,63}"                     # 顶级域名
+    r"(:\d{1,5})?"                         # 可选端口
+    r"(/\S*)?$"                            # 可选路径
+)
 
 
 class RiskLevelEnum(str, Enum):
@@ -140,6 +150,16 @@ class AnalysisRequest(BaseModel):
     analyst_id:     Optional[str] = None
     extra_keywords: List[str] = []    # 案情补充关键词
     ai_engine:      str = "auto"      # auto / gemini / deepseek
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("URL 不能为空")
+        if not _URL_RE.match(v):
+            raise ValueError(f"URL 格式不合法: {v}")
+        return v
 
 
 class AnalysisResponse(BaseModel):

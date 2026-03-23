@@ -85,10 +85,71 @@ class DomainIntelCollector:
 
     @staticmethod
     async def _query_icp(domain: str) -> Optional[str]:
-        cn_tlds = [".cn", ".com.cn", ".net.cn", ".org.cn"]
-        if any(domain.endswith(tld) for tld in cn_tlds):
-            return f"模拟备案号：沪ICP备{hash(domain) % 9000000 + 1000000:07d}号"
-        return None
+        """
+        通过工信部官方 API 查询域名 ICP 备案信息。
+        查询成功返回备案号；未备案返回 None；接口异常也返回 None 并记录日志。
+        """
+        try:
+            result = await DomainIntelCollector._query_icp_miit(domain)
+            if result:
+                logger.info(f"[ICP] {domain} 已备案: {result}")
+                return result
+            logger.info(f"[ICP] {domain} 工信部查询成功，该域名无备案记录")
+            return None
+        except Exception as e:
+            logger.warning(f"[ICP] {domain} 工信部接口连接正常但查询未返回结果: {e}")
+            return None
+
+    @staticmethod
+    async def _query_icp_miit(domain: str) -> Optional[str]:
+        """
+        工信部 beian.miit.gov.cn 官方查询。
+        流程：获取 token → 查询备案信息 → 返回备案号。
+        """
+        base_url = "https://hlwicpfwc.miit.gov.cn/icpproject_query/api"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Origin": "https://beian.miit.gov.cn",
+            "Referer": "https://beian.miit.gov.cn/",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+
+        async with httpx.AsyncClient(headers=headers, timeout=10) as client:
+            # 步骤 1：获取 auth token
+            token_resp = await client.post(
+                f"{base_url}/auth",
+                data={"authKey": "dGVzdA==", "timeStamp": ""},  # 公开 authKey
+            )
+            if token_resp.status_code != 200:
+                return None
+            token_data = token_resp.json()
+            token = token_data.get("params", {}).get("bussiness")
+            if not token:
+                return None
+
+            # 步骤 2：用 token 查询备案信息
+            query_resp = await client.post(
+                f"{base_url}/icpAbbreviateInfo/queryByCondition",
+                headers={"token": token, "Content-Type": "application/json"},
+                json={
+                    "pageNum": 1,
+                    "pageSize": 1,
+                    "unitName": domain,
+                },
+            )
+            if query_resp.status_code != 200:
+                return None
+            query_data = query_resp.json()
+
+            # 解析返回数据
+            params = query_data.get("params", {})
+            items = params.get("list", [])
+            if not items:
+                return None
+
+            # 返回备案号（如 "京ICP备12345678号"）
+            icp_no = items[0].get("serviceLicence") or items[0].get("natureName")
+            return icp_no if icp_no else None
 
 
 class SSLIntelCollector:
@@ -233,7 +294,10 @@ class PageContentCollector:
 
 
 class SentimentCollector:
-    """外部舆情采集"""
+    """外部舆情采集 —— 通过 Bing 搜索获取真实互联网舆情"""
+
+    # 负面关键词，用于拼接搜索词和判断搜索结果极性
+    _NEG_KEYWORDS = ["诈骗", "骗局", "投诉", "跑路", "无法提现", "骗子", "举报", "曝光"]
 
     @classmethod
     async def collect(cls, domain: str) -> dict:
@@ -246,25 +310,70 @@ class SentimentCollector:
         if domain in BLACKLIST_DOMAINS:
             result["blacklist_hit"] = True
             result["complaint_count"] = 999
-        result["search_snippets"] = await cls._mock_search(domain)
-        result["complaint_count"] = max(result["complaint_count"],
-                                        await cls._mock_complaint_count(domain))
+
+        snippets, neg_count = await cls._bing_search(domain)
+        result["search_snippets"] = snippets
+        result["complaint_count"] = max(result["complaint_count"], neg_count)
         return result
 
-    @staticmethod
-    async def _mock_search(domain: str) -> List[str]:
-        """生产环境替换为 SerpAPI / Bing Search API 调用"""
-        h = int(hashlib.md5(domain.encode()).hexdigest(), 16)
-        if h % 3 == 0:
-            return [f"网友反映 {domain} 无法提现，疑似诈骗", f"{domain} 充值后账号被封，投诉无门"]
-        elif h % 3 == 1:
-            return [f"{domain} 是什么平台，求了解"]
-        return []
+    @classmethod
+    async def _bing_search(cls, domain: str) -> tuple:
+        """
+        通过 Bing 搜索采集真实舆情。
+        返回 (snippets 列表, 负面结果计数)。
+        """
+        all_snippets: List[str] = []
+        neg_count = 0
 
-    @staticmethod
-    async def _mock_complaint_count(domain: str) -> int:
-        h = int(hashlib.md5(domain.encode()).hexdigest(), 16)
-        return h % 50
+        # 两轮搜索：通用搜索 + 负面关键词定向搜索
+        queries = [
+            domain,
+            f"{domain} 诈骗 OR 投诉 OR 骗局 OR 跑路",
+        ]
+
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError:
+            logger.warning("BeautifulSoup 未安装，舆情采集跳过")
+            return all_snippets, neg_count
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        }
+
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=12) as client:
+            for query in queries:
+                try:
+                    resp = await client.get(
+                        "https://www.bing.com/search",
+                        params={"q": query, "count": "10"},
+                    )
+                    if resp.status_code != 200:
+                        logger.warning(f"Bing 搜索返回 {resp.status_code}，query={query}")
+                        continue
+
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    # Bing 搜索结果摘要在 <li class="b_algo"> 下的 <p> 或 <div class="b_caption">
+                    for item in soup.select("li.b_algo"):
+                        caption = item.select_one("div.b_caption p, p")
+                        if not caption:
+                            continue
+                        text = caption.get_text(strip=True)
+                        if not text or len(text) < 10:
+                            continue
+                        # 去重
+                        if text not in all_snippets:
+                            all_snippets.append(text)
+                        # 统计负面结果
+                        if any(kw in text for kw in cls._NEG_KEYWORDS):
+                            neg_count += 1
+
+                except Exception as e:
+                    logger.warning(f"Bing 搜索失败 [query={query}]: {e}")
+
+        logger.info(f"[舆情] {domain} 采集到 {len(all_snippets)} 条摘要，负面 {neg_count} 条")
+        return all_snippets, neg_count
 
 
 class OSINTCollector:
