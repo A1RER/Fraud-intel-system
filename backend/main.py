@@ -59,6 +59,9 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
+    index = os.path.join(_DIST, "index.html")
+    if os.path.isfile(index):
+        return FileResponse(index)
     return {"status": "online", "system": "涉诈网站智能研判系统", "version": "1.0.0"}
 
 
