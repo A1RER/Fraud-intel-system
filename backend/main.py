@@ -6,9 +6,12 @@ FastAPI 主服务
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from typing import List, Optional
 import asyncio
 import json
+import os
 from datetime import datetime
 from loguru import logger
 import redis.asyncio as aioredis
@@ -147,6 +150,20 @@ async def health_check():
         "redis": "connected" if redis_ok else "disconnected",
         "task_queue_size": task_count,
     }
+
+
+# ── 托管 React 前端静态文件 ──────────────────────────────────────
+# npm run build 会把前端打包到 web/dist/
+_DIST = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "dist")
+if os.path.isdir(_DIST):
+    # 挂载 /assets 等静态资源
+    app.mount("/assets", StaticFiles(directory=os.path.join(_DIST, "assets")), name="assets")
+
+    # 所有非 /api 路径都返回 index.html，让 React 路由接管
+    @app.get("/{full_path:path}")
+    async def serve_frontend(_full_path: str):
+        index = os.path.join(_DIST, "index.html")
+        return FileResponse(index)
 
 
 if __name__ == "__main__":
