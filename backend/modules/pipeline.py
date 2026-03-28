@@ -98,6 +98,7 @@ class AnalysisPipeline:
             content_risk_score=content_result.get("risk_score", 0.0),
             fraud_types=content_result.get("fraud_types", []),
             key_evidence=content_result.get("key_evidence", []),
+            risk_indicators=content_result.get("risk_indicators", []),
             content_reasoning=content_result.get("reasoning", ""),
             visual_risk_score=vision_result.get("visual_risk_score", 0.0),
             is_phishing=vision_result.get("is_phishing", False),
@@ -106,7 +107,7 @@ class AnalysisPipeline:
             visual_description=vision_result.get("description", ""),
             ai_report=ai_report_text,
         )
-    
+
     async def run(self, request: AnalysisRequest) -> AnalysisResponse:
         report_id = f"RPT-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
         start_time = time.time()
@@ -213,6 +214,7 @@ class AnalysisPipeline:
                         content_risk_score=content_result.get("risk_score", 0.0),
                         fraud_types=content_result.get("fraud_types", []),
                         key_evidence=content_result.get("key_evidence", []),
+                        risk_indicators=content_result.get("risk_indicators", []),
                         content_reasoning=content_result.get("reasoning", ""),
                         visual_risk_score=vision_result.get("visual_risk_score", 0.0),
                         is_phishing=vision_result.get("is_phishing", False),

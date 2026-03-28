@@ -330,9 +330,17 @@ function ResultView({ result, gemini, aiLoading, onAIAnalyze }: {
                 )}
                 {gemini.key_evidence.length > 0 && (
                   <div className="mt-3 space-y-1">
-                    <p className="text-slate-500 text-xs">关键证据：</p>
+                    <p className="text-slate-500 text-xs font-mono">关键证据：</p>
                     {gemini.key_evidence.map((ev, i) => (
-                      <p key={i} className="text-slate-400 text-xs">• {ev}</p>
+                      <p key={i} className="text-slate-400 text-xs leading-relaxed">• {ev}</p>
+                    ))}
+                  </div>
+                )}
+                {gemini.risk_indicators.length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    <p className="text-slate-500 text-xs font-mono">风险指标：</p>
+                    {gemini.risk_indicators.map((ri, i) => (
+                      <p key={i} className="text-orange-400/80 text-xs leading-relaxed">▸ {ri}</p>
                     ))}
                   </div>
                 )}

@@ -118,6 +118,7 @@ class GeminiAnalysis(BaseModel):
     content_risk_score:  float = 0.0
     fraud_types:         List[str] = []
     key_evidence:        List[str] = []
+    risk_indicators:     List[str] = []
     content_reasoning:   str = ""
     # 视觉分析
     visual_risk_score:   float = 0.0

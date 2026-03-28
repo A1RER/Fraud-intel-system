@@ -60,6 +60,7 @@ export interface GeminiAnalysis {
   content_risk_score: number
   fraud_types: string[]
   key_evidence: string[]
+  risk_indicators: string[]
   content_reasoning: string
   visual_risk_score: number
   is_phishing: boolean

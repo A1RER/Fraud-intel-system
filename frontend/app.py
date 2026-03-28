@@ -268,6 +268,11 @@ if _stored and _stored.success and _stored.report:
                 for ev in gemini.key_evidence:
                     st.markdown(f"- {ev}")
 
+            if gemini.risk_indicators:
+                st.markdown("**风险指标：**")
+                for ri in gemini.risk_indicators:
+                    st.markdown(f"- {ri}")
+
             # ── AI 视觉分析 ──
             if gemini.visual_risk_score > 0 or gemini.visual_features:
                 st.markdown("---\n### 👁️ AI 视觉分析")
