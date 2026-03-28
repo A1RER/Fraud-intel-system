@@ -67,7 +67,7 @@ URL 输入
   ├── 对应警务处置预案（立即下架 / 监控跟进 / 深度侦查 / 存档）
   └── XAI 可解释热力图（各特征风险贡献可视化）
   ↓
-FastAPI REST API  +  Streamlit 可视化前端
+FastAPI REST API  +  React 可视化前端（Web）/ Streamlit 可视化前端（轻量部署）
 ```
 
 ---
@@ -168,7 +168,14 @@ Final_Score = Raw_Score × C_trust          # 最终分（上限 100）
 ├── config/
 │   └── settings.py               # 全局配置：权重、阈值、关键词库
 ├── frontend/
-│   └── app.py                    # Streamlit 可视化前端
+│   └── app.py                    # Streamlit 轻量前端（快速部署 / 云端部署用）
+├── web/                          # React 现代前端（推荐本地开发使用）
+│   ├── src/
+│   │   ├── App.tsx               # 主界面组件（研判结果展示）
+│   │   ├── types.ts              # TypeScript 类型定义
+│   │   └── main.tsx              # 应用入口
+│   ├── vite.config.ts            # Vite 配置（/api 代理到 FastAPI）
+│   └── package.json
 ├── requirements.txt
 └── .env.example                  # 环境变量示例（不含真实 Key）
 ```
@@ -177,10 +184,12 @@ Final_Score = Raw_Score × C_trust          # 最终分（上限 100）
 
 ## 快速启动
 
-**环境要求：Python 3.11+，Redis**
+**环境要求：Python 3.11+，Node.js 18+，Redis**
+
+### 方式一：React 前端 + FastAPI 后端（推荐）
 
 ```bash
-# 1. 安装依赖
+# 1. 安装 Python 依赖
 pip install -r requirements.txt
 
 # 2. 配置环境变量
@@ -190,11 +199,21 @@ cp .env.example .env
 # 3. 启动 Redis（Windows）
 redis-server
 
-# 4. 启动前端
-streamlit run frontend/app.py
-
-# 5. （可选）单独启动 FastAPI 后端
+# 4. 启动 FastAPI 后端
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+
+# 5. 新开一个终端，安装并启动 React 前端
+cd web
+npm install
+npm run dev
+# 浏览器访问 http://localhost:5173
+```
+
+### 方式二：Streamlit 轻量前端（无需 Node.js）
+
+```bash
+# 完成步骤 1~3 后，直接启动 Streamlit
+streamlit run frontend/app.py
 ```
 
 > **完整页面采集能力（推荐）：**
