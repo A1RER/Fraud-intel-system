@@ -64,20 +64,25 @@ export default function App() {
   async function handleAIAnalyze(engine: string) {
     if (!result?.report_id) return
     setAiLoading(engine)
+    setError(null)
     try {
       const response = await fetch('/api/ai-analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ report_id: result.report_id, ai_engine: engine }),
       })
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(`服务器错误 ${response.status}：${text.slice(0, 200)}`)
+      }
       const data: AIAnalyzeResponse = await response.json()
       if (data.success && data.gemini) {
         setGemini(data.gemini)
       } else {
-        setError(data.error ?? 'AI 分析失败')
+        setError(data.error ?? 'AI 分析失败，请检查 API Key 是否有效')
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'AI 请求失败')
+      setError(err instanceof Error ? err.message : 'AI 请求失败，请检查后端日志')
     } finally {
       setAiLoading(null)
     }

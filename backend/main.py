@@ -4,10 +4,10 @@ FastAPI 主服务
 提供 REST API 接口供前端调用
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from typing import List, Optional
 import asyncio
 import json
@@ -55,6 +55,16 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """确保所有未捕获异常返回 JSON 而非 HTML 错误页"""
+    logger.error(f"[API] 未捕获异常 {request.url}: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "error": str(exc)},
+    )
 
 
 @app.get("/")
