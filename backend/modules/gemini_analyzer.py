@@ -92,12 +92,23 @@ def _call_llm(prompt: str, max_tokens: int = 1024, temperature: float = 0.1,
 
 
 def _parse_json(raw: str) -> dict:
-    """从 LLM 回复中提取 JSON"""
+    """从 LLM 回复中提取 JSON，支持截断恢复"""
     if "```json" in raw:
         raw = raw.split("```json")[1].split("```")[0].strip()
     elif "```" in raw:
         raw = raw.split("```")[1].split("```")[0].strip()
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # JSON 被截断（max_tokens 触顶）：逐步向前找最后一个完整字段并补全
+        for tail in ['",\n', '",', '"],', '"]', '},', '}']:
+            idx = raw.rfind(tail)
+            if idx > 0:
+                try:
+                    return json.loads(raw[:idx + len(tail)].rstrip(",") + "\n}")
+                except Exception:
+                    continue
+        raise
 
 
 # ── 内容语义分析 ──────────────────────────────────────────────
@@ -135,7 +146,7 @@ class GeminiContentAnalyzer:
         try:
             raw, provider = _call_llm(
                 f"{cls.SYSTEM_PROMPT}\n\n请分析以下网站文本：\n\n{text_input}",
-                max_tokens=2048, engine=engine,
+                max_tokens=4096, engine=engine,
             )
             result = _parse_json(raw)
             result["risk_score"] = max(0.0, min(1.0, float(result.get("risk_score", 0.0))))
@@ -194,7 +205,7 @@ class GeminiVisionAnalyzer:
                 contents=[cls.VISION_PROMPT, image_part],
                 config=gemini_types.GenerateContentConfig(
                     temperature=0.2,
-                    max_output_tokens=2048,
+                    max_output_tokens=4096,
                 ),
             )
             raw = resp.text.strip()
