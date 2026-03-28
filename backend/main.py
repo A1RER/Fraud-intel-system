@@ -21,6 +21,7 @@ from backend.modules.pipeline import AnalysisPipeline
 from config.settings import REDIS_URL, REDIS_TASK_TTL, CORS_ORIGINS
 
 TASK_KEY_PREFIX = "fraud:task:"
+AI_TASK_KEY_PREFIX = "fraud:aitask:"
 
 redis_client: Optional[aioredis.Redis] = None
 pipeline = AnalysisPipeline()
@@ -85,16 +86,48 @@ async def analyze_url(request: AnalysisRequest):
 
 
 @app.post("/api/ai-analyze")
-async def ai_analyze(request: AIAnalyzeRequest):
+async def ai_analyze(request: AIAnalyzeRequest, background_tasks: BackgroundTasks):
     """
-    按需 AI 分析接口（复用已缓存的 OSINT 数据，仅运行 AI 引擎）
+    按需 AI 分析接口 —— 立即返回 task_id，后台执行，通过 /api/ai-task/{task_id} 轮询结果。
+    无 Redis 时降级为同步执行（可能超时）。
     """
-    try:
-        gemini_result = await pipeline.run_ai(request.report_id, request.ai_engine)
-        return {"success": True, "gemini": gemini_result.model_dump()}
-    except Exception as e:
-        logger.error(f"[AI] 按需分析失败: {e}")
-        return {"success": False, "error": str(e)}
+    import uuid
+
+    if not redis_client:
+        # 无 Redis：同步执行（仅本地开发用）
+        try:
+            gemini_result = await pipeline.run_ai(request.report_id, request.ai_engine)
+            return {"success": True, "gemini": gemini_result.model_dump()}
+        except Exception as e:
+            logger.error(f"[AI] 按需分析失败: {e}")
+            return {"success": False, "error": str(e)}
+
+    task_id = f"AITASK-{uuid.uuid4().hex[:8].upper()}"
+    _redis = redis_client
+
+    async def _run():
+        try:
+            gemini_result = await pipeline.run_ai(request.report_id, request.ai_engine)
+            payload = json.dumps({"status": "done", "success": True,
+                                  "gemini": gemini_result.model_dump()})
+        except Exception as e:
+            logger.error(f"[AI] 后台任务失败: {e}")
+            payload = json.dumps({"status": "done", "success": False, "error": str(e)})
+        await _redis.set(f"{AI_TASK_KEY_PREFIX}{task_id}", payload, ex=REDIS_TASK_TTL)
+
+    background_tasks.add_task(_run)
+    return {"task_id": task_id, "status": "queued"}
+
+
+@app.get("/api/ai-task/{task_id}")
+async def get_ai_task(task_id: str):
+    """轮询 AI 分析后台任务结果"""
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis 不可用")
+    data = await redis_client.get(f"{AI_TASK_KEY_PREFIX}{task_id}")
+    if data is None:
+        return {"task_id": task_id, "status": "pending"}
+    return json.loads(data)
 
 
 @app.post("/api/analyze/async")

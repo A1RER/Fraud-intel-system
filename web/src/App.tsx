@@ -1,7 +1,7 @@
 // React 的核心概念：useState
 // useState 用来存储"会变化的数据"，每次数据变化，页面自动重新渲染
 import { useState } from 'react'
-import type { AnalysisResponse, AIAnalyzeResponse, RiskLevel, GeminiAnalysis } from './types'
+import type { AnalysisResponse, RiskLevel, GeminiAnalysis } from './types'
 
 // ── 风险等级的颜色/样式配置 ──────────────────────────────────────
 const LEVEL_CONFIG: Record<RiskLevel, {
@@ -60,27 +60,51 @@ export default function App() {
     }
   }
 
-  // 按需调用 AI 分析（Gemini / DeepSeek）
+  // 按需调用 AI 分析（Gemini / DeepSeek）— 提交后台任务，轮询结果
   async function handleAIAnalyze(engine: string) {
     if (!result?.report_id) return
     setAiLoading(engine)
     setError(null)
     try {
-      const response = await fetch('/api/ai-analyze', {
+      // 1. 提交任务
+      const submitRes = await fetch('/api/ai-analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ report_id: result.report_id, ai_engine: engine }),
       })
-      if (!response.ok) {
-        const text = await response.text()
-        throw new Error(`服务器错误 ${response.status}：${text.slice(0, 200)}`)
+      if (!submitRes.ok) {
+        const text = await submitRes.text()
+        throw new Error(`提交失败 ${submitRes.status}：${text.slice(0, 200)}`)
       }
-      const data: AIAnalyzeResponse = await response.json()
-      if (data.success && data.gemini) {
-        setGemini(data.gemini)
-      } else {
-        setError(data.error ?? 'AI 分析失败，请检查 API Key 是否有效')
+      const submitData = await submitRes.json()
+
+      // 无 Redis 时后端直接返回结果
+      if (!submitData.task_id) {
+        if (submitData.success && submitData.gemini) {
+          setGemini(submitData.gemini)
+        } else {
+          setError(submitData.error ?? 'AI 分析失败')
+        }
+        return
       }
+
+      // 2. 轮询结果（最多 120 次 × 3 秒 = 6 分钟）
+      const taskId: string = submitData.task_id
+      for (let i = 0; i < 120; i++) {
+        await new Promise(r => setTimeout(r, 3000))
+        const pollRes = await fetch(`/api/ai-task/${taskId}`)
+        if (!pollRes.ok) continue
+        const pollData = await pollRes.json()
+        if (pollData.status === 'done') {
+          if (pollData.success && pollData.gemini) {
+            setGemini(pollData.gemini)
+          } else {
+            setError(pollData.error ?? 'AI 分析失败，请检查 API Key 是否有效')
+          }
+          return
+        }
+      }
+      setError('AI 分析超时（超过6分钟），请重试或检查后端日志')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'AI 请求失败，请检查后端日志')
     } finally {

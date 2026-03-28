@@ -310,7 +310,7 @@ class GeminiReportGenerator:
         try:
             report_text, provider = _call_llm(
                 f"{cls.REPORT_PROMPT}\n\n以下是本次分析的情报数据：\n{intel_summary}",
-                max_tokens=8192, temperature=0.4, engine=engine,
+                max_tokens=4096, temperature=0.4, engine=engine,
             )
             logger.info(f"[AI] 侦查报告生成完成 [{provider}]")
             return report_text, provider
