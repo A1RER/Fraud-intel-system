@@ -8,6 +8,7 @@ import uuid
 import time
 from datetime import datetime, timezone
 from typing import List, Optional
+from collections import OrderedDict
 from loguru import logger
 
 from backend.models.schemas import (
@@ -25,13 +26,86 @@ from config.settings import DISPOSAL_PLANS, GEMINI_MODEL
 class AnalysisPipeline:
     """
     情报分析流水线
-    
+
     流程：
     URL → OSINT采集 → 特征工程 → WRAS评分 → 决策输出 → 结构化报告
     """
-    
+    _ai_cache: OrderedDict = OrderedDict()
+    _CACHE_MAX = 100
+
     def __init__(self):
         self.wras_engine = WRASEngine()
+
+    def _cache_for_ai(self, report_id: str, raw_intel, report_context: dict):
+        """缓存分析上下文供后续按需 AI 分析"""
+        AnalysisPipeline._ai_cache[report_id] = {
+            "page_text": raw_intel.page_text or "",
+            "page_title": raw_intel.page_title or "",
+            "screenshot_b64": raw_intel.screenshot_b64 or "",
+            "report_context": report_context,
+        }
+        while len(AnalysisPipeline._ai_cache) > self._CACHE_MAX:
+            AnalysisPipeline._ai_cache.popitem(last=False)
+
+    async def run_ai(self, report_id: str, ai_engine: str) -> GeminiAnalysis:
+        """按需运行 AI 分析（复用已缓存的 OSINT 数据，不重复采集）"""
+        cached = AnalysisPipeline._ai_cache.get(report_id)
+        if not cached:
+            raise ValueError("分析缓存已过期，请重新执行基础分析")
+
+        page_text = cached["page_text"]
+        page_title = cached["page_title"]
+        screenshot_b64 = cached["screenshot_b64"]
+        report_context = dict(cached["report_context"])
+
+        ai_start = time.time()
+
+        content_result = {}
+        try:
+            content_result = GeminiContentAnalyzer.analyze(
+                page_text, page_title, engine=ai_engine,
+            )
+        except Exception as e:
+            logger.warning(f"[AI] 内容分析失败: {e}")
+
+        vision_result = {}
+        try:
+            vision_result = GeminiVisionAnalyzer.analyze(
+                screenshot_b64, engine=ai_engine,
+            )
+        except Exception as e:
+            logger.warning(f"[AI] 视觉分析失败: {e}")
+
+        report_context["ai_content_score"] = content_result.get("risk_score", 0)
+        report_context["ai_fraud_types"] = content_result.get("fraud_types", [])
+        report_context["ai_evidence"] = content_result.get("key_evidence", [])
+
+        try:
+            ai_report_text, report_provider = GeminiReportGenerator.generate(
+                report_context, engine=ai_engine,
+            )
+        except Exception as e:
+            ai_report_text = f"⚠️ AI 报告生成失败：{e}"
+            report_provider = ""
+
+        content_provider = content_result.get("_provider", "")
+        actual_provider = report_provider or content_provider or ""
+
+        logger.success(f"[PIPELINE] 按需 AI 分析完成 [{actual_provider}]")
+        return GeminiAnalysis(
+            model_name=actual_provider,
+            ai_elapsed_s=round(time.time() - ai_start, 2),
+            content_risk_score=content_result.get("risk_score", 0.0),
+            fraud_types=content_result.get("fraud_types", []),
+            key_evidence=content_result.get("key_evidence", []),
+            content_reasoning=content_result.get("reasoning", ""),
+            visual_risk_score=vision_result.get("visual_risk_score", 0.0),
+            is_phishing=vision_result.get("is_phishing", False),
+            impersonates=vision_result.get("impersonates"),
+            visual_features=vision_result.get("visual_features", []),
+            visual_description=vision_result.get("description", ""),
+            ai_report=ai_report_text,
+        )
     
     async def run(self, request: AnalysisRequest) -> AnalysisResponse:
         report_id = f"RPT-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
@@ -94,38 +168,42 @@ class AnalysisPipeline:
             disposal_data = DISPOSAL_PLANS[wras_result.risk_level.value]
             disposal = DisposalPlan(**disposal_data)
 
+            # 构建报告上下文（始终构建，供即时或按需 AI 分析使用）
+            report_context = {
+                "url": request.url,
+                "domain": raw_intel.domain,
+                "wras_score": wras_result.final_score,
+                "risk_level": wras_result.risk_level.value,
+                "confidence": wras_result.confidence_coeff,
+                "domain_age_days": raw_intel.domain_age_days,
+                "icp_record": raw_intel.icp_record,
+                "whois_privacy": raw_intel.whois_privacy,
+                "ssl_valid": raw_intel.ssl_valid,
+                "ssl_self_signed": raw_intel.ssl_self_signed,
+                "server_ip": raw_intel.server_ip,
+                "server_country": raw_intel.server_country,
+                "server_isp": raw_intel.server_isp,
+                "is_cdn": raw_intel.is_cdn,
+                "redirect_count": len(raw_intel.redirect_chain),
+                "blacklist_hit": raw_intel.blacklist_hit,
+                "complaint_count": raw_intel.complaint_count,
+                "search_snippets": raw_intel.search_snippets,
+                "ai_content_score": content_result.get("risk_score", 0),
+                "ai_fraud_types": content_result.get("fraud_types", []),
+                "ai_evidence": content_result.get("key_evidence", []),
+                "score_breakdown": wras_result.score_breakdown,
+                "feature_contrib": wras_result.feature_contrib,
+            }
+
+            # 缓存供后续按需 AI 分析
+            self._cache_for_ai(report_id, raw_intel, report_context)
+
             gemini_result = None
             ai_start = time.time()
             if engine_available:
                 try:
-                    report_context = {
-                        "url": request.url,
-                        "domain": raw_intel.domain,
-                        "wras_score": wras_result.final_score,
-                        "risk_level": wras_result.risk_level.value,
-                        "confidence": wras_result.confidence_coeff,
-                        "domain_age_days": raw_intel.domain_age_days,
-                        "icp_record": raw_intel.icp_record,
-                        "whois_privacy": raw_intel.whois_privacy,
-                        "ssl_valid": raw_intel.ssl_valid,
-                        "ssl_self_signed": raw_intel.ssl_self_signed,
-                        "server_ip": raw_intel.server_ip,
-                        "server_country": raw_intel.server_country,
-                        "server_isp": raw_intel.server_isp,
-                        "is_cdn": raw_intel.is_cdn,
-                        "redirect_count": len(raw_intel.redirect_chain),
-                        "blacklist_hit": raw_intel.blacklist_hit,
-                        "complaint_count": raw_intel.complaint_count,
-                        "search_snippets": raw_intel.search_snippets,
-                        "ai_content_score": content_result.get("risk_score", 0),
-                        "ai_fraud_types": content_result.get("fraud_types", []),
-                        "ai_evidence": content_result.get("key_evidence", []),
-                        "score_breakdown": wras_result.score_breakdown,
-                        "feature_contrib": wras_result.feature_contrib,
-                    }
                     ai_report_text, report_provider = GeminiReportGenerator.generate(report_context, engine=ai_engine)
 
-                    # 确定实际使用的 AI 提供商
                     content_provider = content_result.get("_provider", "")
                     actual_provider = report_provider or content_provider or GEMINI_MODEL
 

@@ -149,7 +149,7 @@ class AnalysisRequest(BaseModel):
     priority:       str = "normal"    # normal / urgent
     analyst_id:     Optional[str] = None
     extra_keywords: List[str] = []    # 案情补充关键词
-    ai_engine:      str = "auto"      # auto / gemini / deepseek
+    ai_engine:      str = "none"      # none / auto / gemini / deepseek
 
     @field_validator("url")
     @classmethod
@@ -160,6 +160,12 @@ class AnalysisRequest(BaseModel):
         if not _URL_RE.match(v):
             raise ValueError(f"URL 格式不合法: {v}")
         return v
+
+
+class AIAnalyzeRequest(BaseModel):
+    """按需 AI 分析请求"""
+    report_id: str
+    ai_engine: str = "auto"   # gemini / deepseek / auto
 
 
 class AnalysisResponse(BaseModel):

@@ -19,6 +19,9 @@ for _secret_key in ["GEMINI_API_KEY", "DEEPSEEK_API_KEY"]:
     except (KeyError, FileNotFoundError, Exception):
         pass
 
+from backend.modules.pipeline import AnalysisPipeline
+from backend.models.schemas import AnalysisRequest
+
 st.set_page_config(
     page_title="涉诈网站智能研判系统",
     page_icon="🔍",
@@ -54,6 +57,22 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ── 处理按需 AI 分析（在页面渲染前执行）──────────────────────────
+_pending_ai = st.session_state.pop("_pending_ai", None)
+if _pending_ai and st.session_state.get("_report_id"):
+    with st.spinner(f"🤖 正在执行 {_pending_ai.upper()} AI 深度分析..."):
+        try:
+            _pipeline = AnalysisPipeline()
+            _loop = asyncio.new_event_loop()
+            _gemini = _loop.run_until_complete(
+                _pipeline.run_ai(st.session_state["_report_id"], _pending_ai)
+            )
+            _loop.close()
+            st.session_state["gemini_result"] = _gemini
+        except Exception as e:
+            st.error(f"AI 分析失败：{e}")
+
+# ── 侧边栏 ──────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ 分析参数配置")
     priority = st.selectbox("任务优先级", ["normal", "urgent"], index=0)
@@ -61,29 +80,15 @@ with st.sidebar:
     extra_kw_input = st.text_area("补充风险关键词（每行一个）", placeholder="如：\n安全账户\n资金核验", height=100)
     extra_keywords = [k.strip() for k in extra_kw_input.splitlines() if k.strip()]
     st.markdown("---")
-    # ── AI 引擎选择 ──
-    st.markdown("### 🤖 AI 引擎选择")
+    # ── AI 引擎状态 ──
+    st.markdown("### 🤖 AI 引擎状态")
     _gk = os.getenv("GEMINI_API_KEY", "")
     _dk = os.getenv("DEEPSEEK_API_KEY", "")
-    _engine_options = {"自动（Gemini 优先）": "auto", "仅 Gemini": "gemini", "仅 DeepSeek": "deepseek"}
-    _engine_label = st.radio("选择 AI 分析引擎", list(_engine_options.keys()), index=0, help="自动模式下 Gemini 为主引擎，失败时切换 DeepSeek")
-    ai_engine = _engine_options[_engine_label]
-    # 状态提示
-    if ai_engine == "gemini" and not _gk:
-        st.error("Gemini API Key 未配置")
-    elif ai_engine == "deepseek" and not _dk:
-        st.error("DeepSeek API Key 未配置")
-    elif ai_engine == "auto" and not _gk and not _dk:
-        st.warning("✦ AI 未连接 — 请配置至少一个 API Key")
+    if _gk or _dk:
+        st.success(f"✦ Gemini {'✓' if _gk else '✗'} / DeepSeek {'✓' if _dk else '✗'}")
+        st.caption("💡 基础分析不消耗 AI 额度，分析完成后可按需调用")
     else:
-        _status_map = {
-            "auto": f"✦ 双引擎就绪 (Gemini{'✓' if _gk else '✗'} / DeepSeek{'✓' if _dk else '✗'})",
-            "gemini": "✦ Gemini AI 已连接",
-            "deepseek": "✦ DeepSeek AI 已连接",
-        }
-        st.success(_status_map[ai_engine])
-    if ai_engine == "deepseek":
-        st.caption("注意：DeepSeek 不支持视觉分析，截图分析将跳过")
+        st.warning("✦ AI 未连接 — 请配置至少一个 API Key")
     st.markdown("---")
     st.markdown("### 📋 风险等级说明")
     st.markdown("🔴 **RED ≥ 80** — 高危，立即处置\n\n🟠 **ORANGE 60~79** — 中高风险，重点监控\n\n🟡 **YELLOW 40~59** — 疑似风险，继续侦查\n\n🟢 **GREEN < 40** — 暂无风险，存档备查")
@@ -94,12 +99,14 @@ with st.sidebar:
         if st.button(label, use_container_width=True):
             st.session_state["target_url"] = demo_url
 
+# ── 输入区 ──────────────────────────────────────────────────────
 col_input, col_btn = st.columns([4, 1])
 with col_input:
     url_input = st.text_input("", value=st.session_state.get("target_url", ""), placeholder="输入目标网址，如：suspicious-invest.com", label_visibility="collapsed")
 with col_btn:
     analyze_btn = st.button("▶ 开始研判", use_container_width=True)
 
+# ── 辅助函数 ────────────────────────────────────────────────────
 def risk_color(level):
     return {"RED":"#f44336","ORANGE":"#ff9800","YELLOW":"#ffeb3b","GREEN":"#4caf50"}.get(level,"#90a4ae")
 def risk_emoji(level):
@@ -110,12 +117,11 @@ def render_bar(name, value, contrib):
     color = "#f44336" if value>0.7 else ("#ff9800" if value>0.4 else ("#ffeb3b" if value>0.2 else "#4caf50"))
     st.markdown(f"""<div style="margin:6px 0"><div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:#78909c;font-family:'Share Tech Mono',monospace">{name}</span><span style="font-size:11px;color:#90a4ae">{pct}%  贡献:{contrib:.2f}分</span></div><div class="feat-bar-bg"><div style="background:{color};height:8px;border-radius:3px;width:{pct}%"></div></div></div>""", unsafe_allow_html=True)
 
+# ── 执行分析 ────────────────────────────────────────────────────
 if analyze_btn and url_input.strip():
     with st.spinner("🔄 正在执行多维度情报采集与研判分析..."):
         try:
-            from backend.modules.pipeline import AnalysisPipeline
-            from backend.models.schemas import AnalysisRequest
-            request = AnalysisRequest(url=url_input.strip(), priority=priority, analyst_id=analyst_id or None, extra_keywords=extra_keywords, ai_engine=ai_engine)
+            request = AnalysisRequest(url=url_input.strip(), priority=priority, analyst_id=analyst_id or None, extra_keywords=extra_keywords, ai_engine="none")
         except ValueError as e:
             st.error(f"⚠️ 输入网址格式不正确：{e}")
             st.stop()
@@ -127,15 +133,21 @@ if analyze_btn and url_input.strip():
         except Exception as e:
             st.error(f"分析失败：{e}")
             st.stop()
+    # 存入 session_state
+    st.session_state["analysis_result"] = result
+    st.session_state["_report_id"] = result.report_id if result.success else None
+    st.session_state.pop("gemini_result", None)  # 清除旧 AI 结果
+elif analyze_btn:
+    st.warning("⚠️ 请输入目标网址")
 
-    if not result.success:
-        st.error(f"❌ 分析异常：{result.error}")
-        st.stop()
+# ── 展示结果（从 session_state 读取）─────────────────────────────
+_stored = st.session_state.get("analysis_result")
+if _stored and not _stored.success:
+    st.error(f"❌ 分析异常：{_stored.error}")
 
+if _stored and _stored.success and _stored.report:
+    result = _stored
     report = result.report
-    if report is None:
-        st.error("❌ 报告数据为空")
-        st.stop()
     wras = report.wras
     intel = report.raw_intel
     feat = report.features
@@ -162,7 +174,8 @@ if analyze_btn and url_input.strip():
         "public_sentiment_neg":"负面舆情强度","complaint_count_norm":"投诉量归一化","blacklist_hit":"黑名单命中",
     }
 
-    gemini = getattr(report, "gemini", None)
+    # 优先使用按需 AI 结果，否则使用 pipeline 内置结果
+    gemini = st.session_state.get("gemini_result") or getattr(report, "gemini", None)
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 风险热力图", "🔍 原始情报", "⚖️ 处置预案", "🤖 AI 智能分析", "📄 完整报告"])
 
     with tab1:
@@ -276,7 +289,30 @@ if analyze_btn and url_input.strip():
                 st.markdown("---\n### 📝 AI 侦查报告")
                 st.markdown(gemini.ai_report)
         else:
-            st.info("⚠️ AI 引擎未配置或分析未执行。请在 .env 中配置 GEMINI_API_KEY 或 DEEPSEEK_API_KEY 以启用 AI 智能分析。")
+            # ── 按需 AI 分析入口 ──
+            st.markdown("""<div style="background:#0a1628;border:1px solid #1e3a5f;border-radius:8px;padding:20px;margin:8px 0;text-align:center">
+              <div style="font-size:16px;color:#4fc3f7;margin-bottom:8px">💡 基础分析已完成，AI 深度分析按需调用</div>
+              <div style="font-size:12px;color:#546e7a">选择引擎后将执行内容语义分析、视觉分析和侦查报告生成</div>
+            </div>""", unsafe_allow_html=True)
+            col_g, col_d = st.columns(2)
+            with col_g:
+                _gk = os.getenv("GEMINI_API_KEY", "")
+                if st.button("✦ Gemini 深度分析", use_container_width=True, disabled=not _gk):
+                    st.session_state["_pending_ai"] = "gemini"
+                    st.rerun()
+                if not _gk:
+                    st.caption("⚠️ 未配置 GEMINI_API_KEY")
+                else:
+                    st.caption("支持内容 + 视觉分析")
+            with col_d:
+                _dk = os.getenv("DEEPSEEK_API_KEY", "")
+                if st.button("✦ DeepSeek 深度分析", use_container_width=True, disabled=not _dk):
+                    st.session_state["_pending_ai"] = "deepseek"
+                    st.rerun()
+                if not _dk:
+                    st.caption("⚠️ 未配置 DEEPSEEK_API_KEY")
+                else:
+                    st.caption("仅支持内容分析（无视觉）")
 
     with tab5:
         report_dict = {"report_id":report.report_id,"analyzed_at":report.analyzed_at.isoformat(),"url":report.url,"wras_score":wras.final_score,"risk_level":wras.risk_level.value,"disposal_action":report.disposal.action,"feature_vector":{k:v for k,v in feat.model_dump().items() if isinstance(v,(int,float))},"feature_contributions":wras.feature_contrib,"score_breakdown":wras.score_breakdown}
@@ -284,6 +320,3 @@ if analyze_btn and url_input.strip():
             report_dict["gemini_analysis"] = {"content_risk_score":gemini.content_risk_score,"fraud_types":gemini.fraud_types,"visual_risk_score":gemini.visual_risk_score,"is_phishing":gemini.is_phishing}
         st.json(report_dict)
         st.download_button(label="⬇ 下载 JSON 报告", data=json.dumps(report_dict, ensure_ascii=False, indent=2), file_name=f"{report.report_id}.json", mime="application/json")
-
-elif analyze_btn:
-    st.warning("⚠️ 请输入目标网址")

@@ -1,7 +1,7 @@
 // React 的核心概念：useState
 // useState 用来存储"会变化的数据"，每次数据变化，页面自动重新渲染
 import { useState } from 'react'
-import type { AnalysisResponse, RiskLevel } from './types'
+import type { AnalysisResponse, AIAnalyzeResponse, RiskLevel, GeminiAnalysis } from './types'
 
 // ── 风险等级的颜色/样式配置 ──────────────────────────────────────
 const LEVEL_CONFIG: Record<RiskLevel, {
@@ -21,10 +21,12 @@ const LEVEL_CONFIG: Record<RiskLevel, {
 // React 里每个"组件"就是一个返回 JSX（类似 HTML）的函数
 export default function App() {
   // useState<类型>(初始值) → 返回 [当前值, 修改函数]
-  const [url, setUrl]         = useState('')
-  const [loading, setLoading] = useState(false)
-  const [result, setResult]   = useState<AnalysisResponse | null>(null)
-  const [error, setError]     = useState<string | null>(null)
+  const [url, setUrl]             = useState('')
+  const [loading, setLoading]     = useState(false)
+  const [result, setResult]       = useState<AnalysisResponse | null>(null)
+  const [error, setError]         = useState<string | null>(null)
+  const [aiLoading, setAiLoading] = useState<string | null>(null)   // 'gemini' | 'deepseek' | null
+  const [gemini, setGemini]       = useState<GeminiAnalysis | null>(null)
 
   // 点击"开始研判"时执行的函数
   async function handleAnalyze() {
@@ -33,6 +35,7 @@ export default function App() {
     setLoading(true)
     setError(null)
     setResult(null)
+    setGemini(null)
 
     try {
       // fetch 调用后端 API，因为 vite.config.ts 里配置了 proxy，
@@ -54,6 +57,29 @@ export default function App() {
     } finally {
       // finally 无论成功失败都会执行，用来关闭 loading 状态
       setLoading(false)
+    }
+  }
+
+  // 按需调用 AI 分析（Gemini / DeepSeek）
+  async function handleAIAnalyze(engine: string) {
+    if (!result?.report_id) return
+    setAiLoading(engine)
+    try {
+      const response = await fetch('/api/ai-analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ report_id: result.report_id, ai_engine: engine }),
+      })
+      const data: AIAnalyzeResponse = await response.json()
+      if (data.success && data.gemini) {
+        setGemini(data.gemini)
+      } else {
+        setError(data.error ?? 'AI 分析失败')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'AI 请求失败')
+    } finally {
+      setAiLoading(null)
     }
   }
 
@@ -130,7 +156,7 @@ export default function App() {
 
         {/* 分析结果 */}
         {result?.success && result.report && (
-          <ResultView result={result} />
+          <ResultView result={result} gemini={gemini} aiLoading={aiLoading} onAIAnalyze={handleAIAnalyze} />
         )}
 
       </main>
@@ -141,7 +167,12 @@ export default function App() {
 // ── 结果展示组件 ──────────────────────────────────────────────────
 // 把结果展示拆成独立组件，让 App 保持简洁
 // props（属性）是父组件传给子组件的数据，类似函数的参数
-function ResultView({ result }: { result: AnalysisResponse }) {
+function ResultView({ result, gemini, aiLoading, onAIAnalyze }: {
+  result: AnalysisResponse
+  gemini: GeminiAnalysis | null
+  aiLoading: string | null
+  onAIAnalyze: (engine: string) => void
+}) {
   const report  = result.report!
   const { wras, disposal, raw_intel, features } = report
   const level   = LEVEL_CONFIG[wras.risk_level]
@@ -229,6 +260,114 @@ function ResultView({ result }: { result: AnalysisResponse }) {
             />
           ))}
         </div>
+      </div>
+
+      {/* AI 深度分析（按需） */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <h2 className="text-slate-500 text-xs font-mono tracking-wider mb-4">AI 深度分析（按需调用，节省费用）</h2>
+
+        {!gemini && !aiLoading && (
+          <div className="space-y-3">
+            <p className="text-slate-500 text-sm">基础分析已完成。如需 AI 深度语义分析，请选择引擎：</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => onAIAnalyze('gemini')}
+                className="bg-emerald-900/50 hover:bg-emerald-800/50 border border-emerald-700
+                           text-emerald-300 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+              >
+                ✦ Gemini 分析
+              </button>
+              <button
+                onClick={() => onAIAnalyze('deepseek')}
+                className="bg-blue-900/50 hover:bg-blue-800/50 border border-blue-700
+                           text-blue-300 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+              >
+                ✦ DeepSeek 分析
+              </button>
+            </div>
+            <p className="text-slate-700 text-xs">提示：Gemini 支持视觉分析，DeepSeek 仅支持文本分析</p>
+          </div>
+        )}
+
+        {aiLoading && (
+          <div className="text-center py-8 text-slate-500">
+            <div className="text-3xl mb-3 animate-pulse">✦</div>
+            <p className="text-sm">正在执行 {aiLoading === 'gemini' ? 'Gemini' : 'DeepSeek'} AI 深度分析...</p>
+          </div>
+        )}
+
+        {gemini && (
+          <div className="space-y-4">
+            {/* AI 来源标识 */}
+            <div className="flex items-center justify-between bg-slate-950 rounded-lg px-4 py-2 border border-green-900/50">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">✦</span>
+                <span className="text-green-400 font-medium text-sm">Powered by {gemini.model_name || 'AI Engine'}</span>
+              </div>
+              <span className="text-slate-600 text-xs font-mono">耗时 {gemini.ai_elapsed_s.toFixed(1)}s</span>
+            </div>
+
+            {/* 内容语义分析 */}
+            {(gemini.content_risk_score > 0 || gemini.content_reasoning) && (
+              <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
+                <h3 className="text-slate-400 text-xs font-mono mb-3">AI 内容语义分析</h3>
+                <div className="flex items-center gap-4">
+                  <span className={`text-3xl font-bold font-mono ${
+                    gemini.content_risk_score > 0.7 ? 'text-red-400' :
+                    gemini.content_risk_score > 0.4 ? 'text-orange-400' :
+                    gemini.content_risk_score > 0.2 ? 'text-yellow-400' : 'text-green-400'
+                  }`}>
+                    {(gemini.content_risk_score * 100).toFixed(0)}%
+                  </span>
+                  <p className="text-slate-400 text-sm">{gemini.content_reasoning}</p>
+                </div>
+                {gemini.fraud_types.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {gemini.fraud_types.map((ft, i) => (
+                      <span key={i} className="bg-red-950 text-red-300 border border-red-800 px-2 py-0.5 rounded-full text-xs">{ft}</span>
+                    ))}
+                  </div>
+                )}
+                {gemini.key_evidence.length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    <p className="text-slate-500 text-xs">关键证据：</p>
+                    {gemini.key_evidence.map((ev, i) => (
+                      <p key={i} className="text-slate-400 text-xs">• {ev}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 视觉分析 */}
+            {(gemini.visual_risk_score > 0 || gemini.visual_features.length > 0) && (
+              <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
+                <h3 className="text-slate-400 text-xs font-mono mb-3">AI 视觉分析</h3>
+                <div className="flex items-center gap-4">
+                  <span className={`text-3xl font-bold font-mono ${
+                    gemini.visual_risk_score > 0.7 ? 'text-red-400' :
+                    gemini.visual_risk_score > 0.4 ? 'text-orange-400' : 'text-green-400'
+                  }`}>
+                    {(gemini.visual_risk_score * 100).toFixed(0)}%
+                  </span>
+                  <div>
+                    <p className="text-slate-400 text-sm">{gemini.visual_description}</p>
+                    {gemini.is_phishing && <span className="text-red-400 font-bold text-xs">⚠️ 钓鱼网站</span>}
+                    {gemini.impersonates && <span className="text-orange-400 text-xs ml-2">仿冒: {gemini.impersonates}</span>}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* AI 侦查报告 */}
+            {gemini.ai_report && (
+              <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
+                <h3 className="text-slate-400 text-xs font-mono mb-3">AI 侦查报告</h3>
+                <div className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{gemini.ai_report}</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
     </div>

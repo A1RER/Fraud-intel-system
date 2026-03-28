@@ -16,7 +16,7 @@ from datetime import datetime
 from loguru import logger
 import redis.asyncio as aioredis
 
-from backend.models.schemas import AnalysisRequest, AnalysisResponse
+from backend.models.schemas import AnalysisRequest, AnalysisResponse, AIAnalyzeRequest
 from backend.modules.pipeline import AnalysisPipeline
 from config.settings import REDIS_URL, REDIS_TASK_TTL, CORS_ORIGINS
 
@@ -72,6 +72,19 @@ async def analyze_url(request: AnalysisRequest):
     """
     result = await pipeline.run(request)
     return result
+
+
+@app.post("/api/ai-analyze")
+async def ai_analyze(request: AIAnalyzeRequest):
+    """
+    按需 AI 分析接口（复用已缓存的 OSINT 数据，仅运行 AI 引擎）
+    """
+    try:
+        gemini_result = await pipeline.run_ai(request.report_id, request.ai_engine)
+        return {"success": True, "gemini": gemini_result.model_dump()}
+    except Exception as e:
+        logger.error(f"[AI] 按需分析失败: {e}")
+        return {"success": False, "error": str(e)}
 
 
 @app.post("/api/analyze/async")

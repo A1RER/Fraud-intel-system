@@ -87,3 +87,9 @@ export interface AnalysisResponse {
   error?: string
   report?: IntelReport
 }
+
+export interface AIAnalyzeResponse {
+  success: boolean
+  error?: string
+  gemini?: GeminiAnalysis
+}
