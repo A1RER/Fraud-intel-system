@@ -94,3 +94,84 @@ export interface AIAnalyzeResponse {
   error?: string
   gemini?: GeminiAnalysis
 }
+
+// ─── 慧眼：招聘诈骗识别 ─────────────────────────────────────────
+
+export type InputType = 'recruitment' | 'chat' | 'company' | 'url'
+
+export interface FraudRiskResult {
+  risk_level: string    // HIGH / MEDIUM / LOW / SAFE
+  risk_score: number
+  fraud_types: string[]
+  confidence: number
+  summary: string
+  evidence: string[]
+  suggestions: string[]
+  keyword_hits: string[]
+  ai_analysis?: string
+}
+
+export interface FraudAnalysisResponse {
+  success: boolean
+  report_id: string
+  input_type: string
+  risk?: FraudRiskResult
+  wras_report?: IntelReport
+  error?: string
+  elapsed_s: number
+}
+
+// ─── 情报库 ─────────────────────────────────────────────────────
+
+export interface IntelRecord {
+  id: number
+  report_id: string
+  input_type: string
+  content: string
+  company_name?: string
+  url?: string
+  risk_level: string
+  risk_score: number
+  fraud_types: string[]
+  confidence: number
+  summary: string
+  evidence: string[]
+  keyword_hits: string[]
+  suggestions: string[]
+  ai_analysis?: string
+  created_at: string
+}
+
+export interface RiskyCompany {
+  id: number
+  company_name: string
+  risk_level: string
+  risk_score: number
+  fraud_types: string[]
+  hit_count: number
+  evidence: string[]
+  first_seen: string
+  last_seen: string
+}
+
+export interface FraudPattern {
+  fraud_type: string
+  total_count: number
+  high_count: number
+  recent_keywords: string[]
+}
+
+export interface TrendDay {
+  date: string
+  count: number
+  high_count: number
+}
+
+export interface IntelStats {
+  total_records: number
+  total_companies: number
+  level_stats: Record<string, number>
+  fraud_patterns: FraudPattern[]
+  trend_7d: TrendDay[]
+  top_companies: { company_name: string; hit_count: number; risk_level: string; risk_score: number }[]
+}

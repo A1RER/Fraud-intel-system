@@ -12,12 +12,21 @@ from typing import List, Optional
 import asyncio
 import json
 import os
+import time
 from datetime import datetime
 from loguru import logger
 import redis.asyncio as aioredis
 
-from backend.models.schemas import AnalysisRequest, AnalysisResponse, AIAnalyzeRequest
+from backend.models.schemas import (
+    AnalysisRequest, AnalysisResponse, AIAnalyzeRequest,
+    FraudAnalysisRequest, FraudAnalysisResponse, FraudRiskResult, InputTypeEnum,
+)
 from backend.modules.pipeline import AnalysisPipeline
+from backend.modules.recruitment_analyzer import RecruitmentAnalyzer
+from backend.modules.company_checker import CompanyChecker
+from backend.modules.fraud_classifier import FraudClassifier
+from backend.modules.evidence_builder import EvidenceBuilder
+from backend.modules.intel_db import init_db, save_record, get_records, get_companies, get_record_detail, get_company_detail, get_stats
 from config.settings import REDIS_URL, REDIS_TASK_TTL, CORS_ORIGINS
 
 TASK_KEY_PREFIX = "fraud:task:"
@@ -30,6 +39,7 @@ pipeline = AnalysisPipeline()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global redis_client
+    init_db()
     redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
     try:
         await redis_client.ping()
@@ -209,6 +219,167 @@ async def health_check():
         "redis": "connected" if redis_ok else "disconnected",
         "task_queue_size": task_count,
     }
+
+
+@app.post("/api/fraud-analyze", response_model=FraudAnalysisResponse)
+async def fraud_analyze(request: FraudAnalysisRequest):
+    """慧眼 - 招聘诈骗智能识别（支持招聘文本 / 聊天记录 / 公司名称 / 网站链接）"""
+    import uuid
+    report_id = f"HY-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
+    start = time.time()
+
+    try:
+        # ── URL 类型：走原有 OSINT 流水线 ──
+        if request.input_type == InputTypeEnum.URL:
+            url = request.url or request.content
+            old_req = AnalysisRequest(
+                url=url,
+                extra_keywords=request.extra_keywords,
+                ai_engine=request.ai_engine,
+            )
+            old_res = await pipeline.run(old_req)
+
+            risk = None
+            if old_res.success and old_res.report:
+                w = old_res.report.wras
+                level_map = {"RED": "HIGH", "ORANGE": "MEDIUM", "YELLOW": "LOW", "GREEN": "SAFE"}
+                risk = FraudRiskResult(
+                    risk_level=level_map.get(w.risk_level.value, "MEDIUM"),
+                    risk_score=w.final_score,
+                    confidence=w.confidence_coeff,
+                    summary=old_res.report.disposal.action,
+                    suggestions=old_res.report.disposal.steps,
+                )
+
+            return FraudAnalysisResponse(
+                success=old_res.success,
+                report_id=old_res.report_id,
+                input_type="url",
+                risk=risk,
+                wras_report=old_res.report,
+                error=old_res.error,
+                elapsed_s=old_res.elapsed_s,
+            )
+
+        # ── 文本类分析（recruitment / chat / company） ──
+
+        # 1. 话术规则分析
+        text = request.content
+        if request.company_name:
+            text += f"\n公司：{request.company_name}"
+
+        text_result = RecruitmentAnalyzer.analyze(text, request.extra_keywords)
+
+        # 2. 企业核验（有公司名时执行）
+        company_result = None
+        company_name = request.company_name or (
+            request.content if request.input_type == InputTypeEnum.COMPANY else None
+        )
+        if company_name:
+            company_result = await CompanyChecker.check(company_name, context=text)
+
+        # 3. AI 语义分析（ai_engine != "none" 时执行）
+        ai_result = None
+        if request.ai_engine != "none":
+            try:
+                ai_result = RecruitmentAnalyzer.ai_analyze(text, engine=request.ai_engine)
+            except Exception as e:
+                logger.warning(f"[慧眼] AI 分析失败（降级为纯规则）: {e}")
+
+        # 4. 综合分类 → 输出 FraudRiskResult
+        risk = FraudClassifier.classify(
+            text_result=text_result,
+            company_result=company_result,
+            ai_result=ai_result,
+            input_type=request.input_type.value,
+        )
+
+        # 5. 自动入库
+        save_record(
+            report_id=report_id,
+            input_type=request.input_type.value,
+            content=request.content,
+            risk_level=risk.risk_level,
+            risk_score=risk.risk_score,
+            fraud_types=risk.fraud_types,
+            confidence=risk.confidence,
+            summary=risk.summary,
+            evidence=risk.evidence,
+            keyword_hits=risk.keyword_hits,
+            suggestions=risk.suggestions,
+            ai_analysis=risk.ai_analysis,
+            company_name=company_name,
+            url=request.url,
+        )
+
+        return FraudAnalysisResponse(
+            success=True,
+            report_id=report_id,
+            input_type=request.input_type.value,
+            risk=risk,
+            elapsed_s=round(time.time() - start, 2),
+        )
+
+    except Exception as e:
+        logger.error(f"[慧眼] 分析失败: {e}")
+        return FraudAnalysisResponse(
+            success=False,
+            report_id=report_id,
+            input_type=request.input_type.value,
+            error=str(e),
+            elapsed_s=round(time.time() - start, 2),
+        )
+
+
+# ── 慧眼：情报库 API ─────────────────────────────────────────────
+
+@app.get("/api/intel/records")
+async def intel_records(
+    risk_level: Optional[str] = None,
+    fraud_type: Optional[str] = None,
+    company_name: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """查询分析记录"""
+    return get_records(risk_level=risk_level, fraud_type=fraud_type,
+                       company_name=company_name, limit=min(limit, 200), offset=offset)
+
+
+@app.get("/api/intel/records/{report_id}")
+async def intel_record_detail(report_id: str):
+    """获取单条分析记录详情"""
+    detail = get_record_detail(report_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return detail
+
+
+@app.get("/api/intel/companies")
+async def intel_companies(
+    risk_level: Optional[str] = None,
+    keyword: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """查询高风险企业"""
+    return get_companies(risk_level=risk_level, keyword=keyword,
+                         limit=min(limit, 200), offset=offset)
+
+
+@app.get("/api/intel/companies/{company_name}")
+async def intel_company_detail(company_name: str):
+    """获取企业详情 + 关联分析记录"""
+    detail = get_company_detail(company_name)
+    if not detail:
+        raise HTTPException(status_code=404, detail="企业不存在")
+    return detail
+
+
+@app.get("/api/intel/stats")
+async def intel_stats():
+    """情报库统计概览（诈骗类型分布、趋势、高频企业等）"""
+    return get_stats()
 
 
 # ── 托管 React 前端静态文件 ──────────────────────────────────────

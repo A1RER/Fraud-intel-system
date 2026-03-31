@@ -1,445 +1,62 @@
-// React 的核心概念：useState
-// useState 用来存储"会变化的数据"，每次数据变化，页面自动重新渲染
-import { useState } from 'react'
-import type { AnalysisResponse, RiskLevel, GeminiAnalysis } from './types'
+import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
+import AnalyzePage from './pages/AnalyzePage'
+import DatabasePage from './pages/DatabasePage'
+import StatsPage from './pages/StatsPage'
+import EducationPage from './pages/EducationPage'
 
-// ── 风险等级的颜色/样式配置 ──────────────────────────────────────
-const LEVEL_CONFIG: Record<RiskLevel, {
-  color: string
-  bg: string
-  border: string
-  emoji: string
-  label: string
-}> = {
-  RED:    { color: 'text-red-400',    bg: 'bg-red-950/50',    border: 'border-red-800',    emoji: '🔴', label: '高危' },
-  ORANGE: { color: 'text-orange-400', bg: 'bg-orange-950/50', border: 'border-orange-800', emoji: '🟠', label: '中高风险' },
-  YELLOW: { color: 'text-yellow-400', bg: 'bg-yellow-950/50', border: 'border-yellow-800', emoji: '🟡', label: '疑似风险' },
-  GREEN:  { color: 'text-green-400',  bg: 'bg-green-950/50',  border: 'border-green-800',  emoji: '🟢', label: '暂无风险' },
-}
+const NAV_ITEMS = [
+  { to: '/',          label: '风险识别', icon: '🔍' },
+  { to: '/database',  label: '情报库',   icon: '🗄️' },
+  { to: '/stats',     label: '数据看板', icon: '📊' },
+  { to: '/education', label: '反诈宣教', icon: '📚' },
+]
 
-// ── 主组件 ──────────────────────────────────────────────────────
-// React 里每个"组件"就是一个返回 JSX（类似 HTML）的函数
 export default function App() {
-  // useState<类型>(初始值) → 返回 [当前值, 修改函数]
-  const [url, setUrl]             = useState('')
-  const [loading, setLoading]     = useState(false)
-  const [result, setResult]       = useState<AnalysisResponse | null>(null)
-  const [error, setError]         = useState<string | null>(null)
-  const [aiLoading, setAiLoading] = useState<string | null>(null)   // 'gemini' | 'deepseek' | null
-  const [gemini, setGemini]       = useState<GeminiAnalysis | null>(null)
-
-  // 点击"开始研判"时执行的函数
-  async function handleAnalyze() {
-    if (!url.trim()) return
-
-    setLoading(true)
-    setError(null)
-    setResult(null)
-    setGemini(null)
-
-    try {
-      // fetch 调用后端 API，因为 vite.config.ts 里配置了 proxy，
-      // 这里的 /api/analyze 会被转发到 http://localhost:8000/api/analyze
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`服务器错误 ${response.status}`)
-      }
-
-      const data: AnalysisResponse = await response.json()
-      setResult(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '请求失败，请确认后端服务已启动')
-    } finally {
-      // finally 无论成功失败都会执行，用来关闭 loading 状态
-      setLoading(false)
-    }
-  }
-
-  // 按需调用 AI 分析（Gemini / DeepSeek）— 提交后台任务，轮询结果
-  async function handleAIAnalyze(engine: string) {
-    if (!result?.report_id) return
-    setAiLoading(engine)
-    setError(null)
-    try {
-      // 1. 提交任务
-      const submitRes = await fetch('/api/ai-analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ report_id: result.report_id, ai_engine: engine }),
-      })
-      if (!submitRes.ok) {
-        const text = await submitRes.text()
-        throw new Error(`提交失败 ${submitRes.status}：${text.slice(0, 200)}`)
-      }
-      const submitData = await submitRes.json()
-
-      // 无 Redis 时后端直接返回结果
-      if (!submitData.task_id) {
-        if (submitData.success && submitData.gemini) {
-          setGemini(submitData.gemini)
-        } else {
-          setError(submitData.error ?? 'AI 分析失败')
-        }
-        return
-      }
-
-      // 2. 轮询结果（最多 120 次 × 3 秒 = 6 分钟）
-      const taskId: string = submitData.task_id
-      for (let i = 0; i < 120; i++) {
-        await new Promise(r => setTimeout(r, 3000))
-        const pollRes = await fetch(`/api/ai-task/${taskId}`)
-        if (!pollRes.ok) continue
-        const pollData = await pollRes.json()
-        if (pollData.status === 'done') {
-          if (pollData.success && pollData.gemini) {
-            setGemini(pollData.gemini)
-          } else {
-            setError(pollData.error ?? 'AI 分析失败，请检查 API Key 是否有效')
-          }
-          return
-        }
-      }
-      setError('AI 分析超时（超过6分钟），请重试或检查后端日志')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'AI 请求失败，请检查后端日志')
-    } finally {
-      setAiLoading(null)
-    }
-  }
-
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-300">
-
-      {/* 顶部标题栏 */}
-      <header className="border-b border-slate-800 px-6 py-4">
-        <div className="max-w-4xl mx-auto flex items-center gap-3">
-          <span className="text-2xl">🔍</span>
-          <div>
-            <h1 className="text-blue-400 font-bold tracking-widest text-sm">
-              涉诈网站智能研判系统
-            </h1>
-            <p className="text-slate-600 text-xs font-mono">
-              FRAUD WEBSITE ASSESSMENT SYSTEM v2.0 | 仅限授权人员使用
-            </p>
-          </div>
-        </div>
-      </header>
-
-      {/* 主内容区 */}
-      <main className="max-w-4xl mx-auto px-6 py-12 space-y-6">
-
-        {/* 输入区域 */}
-        <div className="flex gap-3">
-          <input
-            type="text"
-            value={url}
-            // onChange 在每次输入时触发，更新 url 状态
-            onChange={(e) => setUrl(e.target.value)}
-            // 支持回车触发分析
-            onKeyDown={(e) => e.key === 'Enter' && handleAnalyze()}
-            placeholder="输入目标网址，如：suspicious-invest.com"
-            disabled={loading}
-            className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-3
-                       text-slate-200 placeholder-slate-600
-                       focus:outline-none focus:border-blue-500
-                       disabled:opacity-50"
-          />
-          <button
-            onClick={handleAnalyze}
-            disabled={loading || !url.trim()}
-            className="bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-600
-                       text-white px-6 py-3 rounded-lg font-medium transition-colors cursor-pointer"
-          >
-            {loading ? '分析中...' : '▶ 开始研判'}
-          </button>
-        </div>
-
-        {/* Loading 状态 */}
-        {/* 在 JSX 里，{条件 && <组件/>} 表示"条件为真时才渲染" */}
-        {loading && (
-          <div className="text-center py-16 text-slate-500">
-            <div className="text-5xl mb-4 animate-pulse">⚡</div>
-            <p className="text-sm">正在执行多维度情报采集与研判分析...</p>
-            <p className="text-xs mt-2 text-slate-700">OSINT 采集 → 特征工程 → WRAS 评分 → AI 分析</p>
-          </div>
-        )}
-
-        {/* 错误提示 */}
-        {error && (
-          <div className="bg-red-950/50 border border-red-800 rounded-lg p-4 text-red-400 text-sm">
-            ⚠️ {error}
-          </div>
-        )}
-
-        {/* 分析失败 */}
-        {result && !result.success && (
-          <div className="bg-red-950/50 border border-red-800 rounded-lg p-4 text-red-400 text-sm">
-            ⚠️ 分析失败：{result.error}
-          </div>
-        )}
-
-        {/* 分析结果 */}
-        {result?.success && result.report && (
-          <ResultView result={result} gemini={gemini} aiLoading={aiLoading} onAIAnalyze={handleAIAnalyze} />
-        )}
-
-      </main>
-    </div>
-  )
-}
-
-// ── 结果展示组件 ──────────────────────────────────────────────────
-// 把结果展示拆成独立组件，让 App 保持简洁
-// props（属性）是父组件传给子组件的数据，类似函数的参数
-function ResultView({ result, gemini, aiLoading, onAIAnalyze }: {
-  result: AnalysisResponse
-  gemini: GeminiAnalysis | null
-  aiLoading: string | null
-  onAIAnalyze: (engine: string) => void
-}) {
-  const report  = result.report!
-  const { wras, disposal, raw_intel, features } = report
-  const level   = LEVEL_CONFIG[wras.risk_level]
-
-  return (
-    <div className="space-y-4">
-
-      {/* 风险评分卡片 */}
-      <div className={`${level.bg} ${level.border} border rounded-xl p-6`}>
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-slate-500 text-xs mb-2 font-mono tracking-wider">WRAS 综合风险评分</p>
-            <p className={`${level.color} text-7xl font-bold font-mono leading-none`}>
-              {wras.final_score.toFixed(1)}
-            </p>
-            <p className={`${level.color} mt-3 text-lg`}>
-              {level.emoji} {wras.risk_level} — {level.label}
-            </p>
-          </div>
-          <div className="text-right text-sm text-slate-600 space-y-1 font-mono">
-            <p>原始分 {wras.raw_score.toFixed(1)}</p>
-            <p>置信度 {(wras.confidence_coeff * 100).toFixed(0)}%</p>
-            <p className="text-slate-700 text-xs mt-3">{report.report_id}</p>
-            <p className="text-slate-700 text-xs">耗时 {result.elapsed_s.toFixed(1)}s</p>
-          </div>
-        </div>
-      </div>
-
-      {/* 两列布局：处置预案 + 基础情报 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-        {/* 处置预案 */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-          <h2 className="text-slate-500 text-xs font-mono tracking-wider mb-3">处置预案</h2>
-          <p className="text-slate-300 text-sm mb-4">{disposal.action}</p>
-          <ol className="space-y-2">
-            {disposal.steps.map((step, i) => (
-              <li key={i} className="flex gap-3 text-sm text-slate-500">
-                <span className={`${level.color} font-bold shrink-0`}>{i + 1}</span>
-                <span>{step}</span>
-              </li>
-            ))}
-          </ol>
-        </div>
-
-        {/* 基础情报 */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-          <h2 className="text-slate-500 text-xs font-mono tracking-wider mb-3">基础情报</h2>
-          <div className="space-y-2 text-sm">
-            <IntelRow label="域名"       value={raw_intel.domain} />
-            <IntelRow label="注册时长"   value={raw_intel.domain_age_days != null ? `${raw_intel.domain_age_days} 天` : '未知'} />
-            <IntelRow label="ICP 备案"   value={raw_intel.icp_record ?? '⚠️ 无备案'}   warn={!raw_intel.icp_record} />
-            <IntelRow label="服务器"     value={`${raw_intel.server_country ?? '未知'} / ${raw_intel.server_isp ?? '—'}`} />
-            <IntelRow label="SSL 证书"   value={raw_intel.ssl_valid ? (raw_intel.ssl_self_signed ? '⚠️ 自签名' : '有效') : '⚠️ 无效'} warn={!raw_intel.ssl_valid || raw_intel.ssl_self_signed} />
-            <IntelRow label="WHOIS 隐私" value={raw_intel.whois_privacy ? '⚠️ 已隐藏' : '正常'} warn={raw_intel.whois_privacy} />
-            <IntelRow label="黑名单"     value={raw_intel.blacklist_hit ? '⚠️ 命中' : '未命中'} warn={raw_intel.blacklist_hit} />
-            <IntelRow label="投诉量"     value={`${raw_intel.complaint_count} 条`} />
-          </div>
-        </div>
-      </div>
-
-      {/* 风险特征热力图 */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <h2 className="text-slate-500 text-xs font-mono tracking-wider mb-4">风险特征热力图（XAI 可解释分析）</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
-          {(Object.entries({
-            keyword_risk_score:      '风险话术密度',
-            public_sentiment_neg:    '负面舆情强度',
-            phishing_visual_sim:     '钓鱼视觉相似度',
-            icp_missing:             'ICP 备案缺失',
-            complaint_count_norm:    '投诉量',
-            domain_age_days:         '域名注册时长',
-            ip_overseas:             '境外服务器',
-            ssl_self_signed:         'SSL 自签名',
-            resource_load_anomaly:   '页面资源异常',
-            whois_privacy_protected: 'WHOIS 信息隐藏',
-            blacklist_hit:           '黑名单命中',
-            ip_cdn_abuse:            'CDN 规避行为',
-          }) as [keyof typeof features, string][]).map(([key, label]) => (
-            <FeatureBar
-              key={key}
-              label={label}
-              value={features[key] as number ?? 0}
-              contrib={wras.feature_contrib[key] ?? 0}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* AI 深度分析（按需） */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-        <h2 className="text-slate-500 text-xs font-mono tracking-wider mb-4">AI 深度分析（按需调用，节省费用）</h2>
-
-        {!gemini && !aiLoading && (
-          <div className="space-y-3">
-            <p className="text-slate-500 text-sm">基础分析已完成。如需 AI 深度语义分析，请选择引擎：</p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => onAIAnalyze('gemini')}
-                className="bg-emerald-900/50 hover:bg-emerald-800/50 border border-emerald-700
-                           text-emerald-300 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer"
-              >
-                ✦ Gemini 分析
-              </button>
-              <button
-                onClick={() => onAIAnalyze('deepseek')}
-                className="bg-blue-900/50 hover:bg-blue-800/50 border border-blue-700
-                           text-blue-300 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer"
-              >
-                ✦ DeepSeek 分析
-              </button>
-            </div>
-            <p className="text-slate-700 text-xs">提示：Gemini 支持视觉分析，DeepSeek 仅支持文本分析</p>
-          </div>
-        )}
-
-        {aiLoading && (
-          <div className="text-center py-8 text-slate-500">
-            <div className="text-3xl mb-3 animate-pulse">✦</div>
-            <p className="text-sm">正在执行 {aiLoading === 'gemini' ? 'Gemini' : 'DeepSeek'} AI 深度分析...</p>
-          </div>
-        )}
-
-        {gemini && (
-          <div className="space-y-4">
-            {/* AI 来源标识 */}
-            <div className="flex items-center justify-between bg-slate-950 rounded-lg px-4 py-2 border border-green-900/50">
-              <div className="flex items-center gap-2">
-                <span className="text-lg">✦</span>
-                <span className="text-green-400 font-medium text-sm">Powered by {gemini.model_name || 'AI Engine'}</span>
+    <BrowserRouter>
+      <div className="min-h-screen bg-slate-950 text-slate-300">
+        {/* 顶部导航 */}
+        <header className="border-b border-slate-800 px-6 py-4">
+          <div className="max-w-5xl mx-auto flex items-center justify-between">
+            <NavLink to="/" className="flex items-center gap-3 no-underline">
+              <span className="text-2xl">👁️</span>
+              <div>
+                <h1 className="text-blue-400 font-bold tracking-widest text-sm">
+                  慧眼 · 招聘诈骗识别与预警系统
+                </h1>
+                <p className="text-slate-600 text-xs font-mono">
+                  WISE EYE — AI-Powered Recruitment Fraud Detection
+                </p>
               </div>
-              <span className="text-slate-600 text-xs font-mono">耗时 {gemini.ai_elapsed_s.toFixed(1)}s</span>
-            </div>
+            </NavLink>
 
-            {/* 内容语义分析 */}
-            {(gemini.content_risk_score > 0 || gemini.content_reasoning) && (
-              <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-                <h3 className="text-slate-400 text-xs font-mono mb-3">AI 内容语义分析</h3>
-                <div className="flex items-center gap-4">
-                  <span className={`text-3xl font-bold font-mono ${
-                    gemini.content_risk_score > 0.7 ? 'text-red-400' :
-                    gemini.content_risk_score > 0.4 ? 'text-orange-400' :
-                    gemini.content_risk_score > 0.2 ? 'text-yellow-400' : 'text-green-400'
-                  }`}>
-                    {(gemini.content_risk_score * 100).toFixed(0)}%
-                  </span>
-                  <p className="text-slate-400 text-sm">{gemini.content_reasoning}</p>
-                </div>
-                {gemini.fraud_types.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {gemini.fraud_types.map((ft, i) => (
-                      <span key={i} className="bg-red-950 text-red-300 border border-red-800 px-2 py-0.5 rounded-full text-xs">{ft}</span>
-                    ))}
-                  </div>
-                )}
-                {gemini.key_evidence.length > 0 && (
-                  <div className="mt-3 space-y-1">
-                    <p className="text-slate-500 text-xs font-mono">关键证据：</p>
-                    {gemini.key_evidence.map((ev, i) => (
-                      <p key={i} className="text-slate-400 text-xs leading-relaxed">• {ev}</p>
-                    ))}
-                  </div>
-                )}
-                {gemini.risk_indicators.length > 0 && (
-                  <div className="mt-3 space-y-1">
-                    <p className="text-slate-500 text-xs font-mono">风险指标：</p>
-                    {gemini.risk_indicators.map((ri, i) => (
-                      <p key={i} className="text-orange-400/80 text-xs leading-relaxed">▸ {ri}</p>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 视觉分析 */}
-            {(gemini.visual_risk_score > 0 || gemini.visual_features.length > 0) && (
-              <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-                <h3 className="text-slate-400 text-xs font-mono mb-3">AI 视觉分析</h3>
-                <div className="flex items-center gap-4">
-                  <span className={`text-3xl font-bold font-mono ${
-                    gemini.visual_risk_score > 0.7 ? 'text-red-400' :
-                    gemini.visual_risk_score > 0.4 ? 'text-orange-400' : 'text-green-400'
-                  }`}>
-                    {(gemini.visual_risk_score * 100).toFixed(0)}%
-                  </span>
-                  <div>
-                    <p className="text-slate-400 text-sm">{gemini.visual_description}</p>
-                    {gemini.is_phishing && <span className="text-red-400 font-bold text-xs">⚠️ 钓鱼网站</span>}
-                    {gemini.impersonates && <span className="text-orange-400 text-xs ml-2">仿冒: {gemini.impersonates}</span>}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* AI 侦查报告 */}
-            {gemini.ai_report && (
-              <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-                <h3 className="text-slate-400 text-xs font-mono mb-3">AI 侦查报告</h3>
-                <div className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{gemini.ai_report}</div>
-              </div>
-            )}
+            <nav className="flex gap-1 bg-slate-900 rounded-lg p-1">
+              {NAV_ITEMS.map(nav => (
+                <NavLink
+                  key={nav.to}
+                  to={nav.to}
+                  end={nav.to === '/'}
+                  className={({ isActive }) =>
+                    `flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all no-underline
+                    ${isActive ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`
+                  }
+                >
+                  <span>{nav.icon}</span>
+                  <span>{nav.label}</span>
+                </NavLink>
+              ))}
+            </nav>
           </div>
-        )}
+        </header>
+
+        {/* 路由 */}
+        <Routes>
+          <Route path="/" element={<AnalyzePage />} />
+          <Route path="/database" element={<DatabasePage />} />
+          <Route path="/stats" element={<StatsPage />} />
+          <Route path="/education" element={<EducationPage />} />
+        </Routes>
       </div>
-
-    </div>
-  )
-}
-
-// ── 情报行 ──────────────────────────────────────────────────────
-function IntelRow({ label, value, warn = false }: { label: string; value: string; warn?: boolean }) {
-  return (
-    <div className="flex justify-between gap-4">
-      <span className="text-slate-600 font-mono shrink-0">{label}</span>
-      <span className={warn ? 'text-orange-400' : 'text-slate-300'} style={{ wordBreak: 'break-all', textAlign: 'right' }}>
-        {value}
-      </span>
-    </div>
-  )
-}
-
-// ── 特征进度条 ───────────────────────────────────────────────────
-function FeatureBar({ label, value, contrib }: { label: string; value: number; contrib: number }) {
-  const pct      = Math.round(value * 100)
-  const barColor = value > 0.7 ? 'bg-red-500' : value > 0.4 ? 'bg-orange-500' : value > 0.2 ? 'bg-yellow-500' : 'bg-green-600'
-
-  return (
-    <div className="py-1.5">
-      <div className="flex justify-between text-xs mb-1">
-        <span className="text-slate-500 font-mono">{label}</span>
-        <span className="text-slate-700">{pct}% · +{contrib.toFixed(2)}分</span>
-      </div>
-      <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
-        <div
-          className={`h-full ${barColor} rounded-full transition-all`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-    </div>
+    </BrowserRouter>
   )
 }

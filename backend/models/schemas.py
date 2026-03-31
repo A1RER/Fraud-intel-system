@@ -175,3 +175,66 @@ class AnalysisResponse(BaseModel):
     report:    Optional[IntelReport] = None
     error:     Optional[str]         = None
     elapsed_s: float                 = 0.0
+
+
+# ─── 慧眼：招聘诈骗识别输入层 ────────────────────────────────────
+
+class InputTypeEnum(str, Enum):
+    """用户输入类型"""
+    RECRUITMENT = "recruitment"    # 招聘信息文本
+    CHAT        = "chat"           # 聊天记录
+    COMPANY     = "company"        # 公司名称
+    URL         = "url"            # 网站链接
+
+
+class FraudAnalysisRequest(BaseModel):
+    """慧眼 - 招聘诈骗分析请求"""
+    input_type:     InputTypeEnum = InputTypeEnum.RECRUITMENT
+    content:        str                          # 主要输入内容
+    company_name:   Optional[str] = None         # 补充：公司名称
+    url:            Optional[str] = None         # 补充：相关链接
+    extra_keywords: List[str]     = []
+    ai_engine:      str           = "auto"       # none / auto / gemini / deepseek
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("输入内容不能为空")
+        if len(v) > 50000:
+            raise ValueError("输入内容过长（最大 50000 字符）")
+        return v
+
+    @field_validator("url")
+    @classmethod
+    def validate_optional_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            if v and not _URL_RE.match(v):
+                raise ValueError(f"URL 格式不合法: {v}")
+        return v or None
+
+
+class FraudRiskResult(BaseModel):
+    """招聘诈骗风险判定结果"""
+    risk_level:    str                  # HIGH / MEDIUM / LOW / SAFE
+    risk_score:    float                # 0-100
+    fraud_types:   List[str] = []       # 识别到的诈骗类型
+    confidence:    float     = 0.0      # 置信度 0-1
+    summary:       str       = ""       # 风险摘要
+    evidence:      List[str] = []       # 证据链
+    suggestions:   List[str] = []       # 防范建议
+    keyword_hits:  List[str] = []       # 命中的风险关键词
+    ai_analysis:   Optional[str] = None # AI 分析详情
+
+
+class FraudAnalysisResponse(BaseModel):
+    """慧眼分析响应"""
+    success:      bool
+    report_id:    str
+    input_type:   str
+    risk:         Optional[FraudRiskResult] = None
+    wras_report:  Optional[IntelReport]     = None   # URL 分析时附带完整 WRAS 报告
+    error:        Optional[str]             = None
+    elapsed_s:    float                     = 0.0

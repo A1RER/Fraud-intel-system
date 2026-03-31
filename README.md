@@ -1,153 +1,66 @@
-# 涉诈网站智能研判与决策支持系统
+# 慧眼 — 招聘诈骗识别与预警系统
 
-> 基于开源情报（OSINT）的涉诈网站自动化研判与决策支持系统，面向公安反诈业务场景，实现对可疑网站的快速情报采集、多维特征评估与风险分级处置。
-
----
-
-## 目录
-
-- [系统概述](#系统概述)
-- [技术架构](#技术架构)
-- [核心模块说明](#核心模块说明)
-- [WRAS 评分体系](#wras-评分体系)
-- [目录结构](#目录结构)
-- [快速启动](#快速启动)
-- [环境变量配置](#环境变量配置)
-- [API 接口文档](#api-接口文档)
-- [云端部署](#云端部署)
-- [扩展方向](#扩展方向)
+> 基于开源情报（OSINT）和 AI 的招聘诈骗智能识别系统，面向大学生求职场景，实现对可疑招聘信息的多维度分析、风险分级、证据链生成和反诈宣教。
 
 ---
 
 ## 系统概述
 
-本系统通过对目标网址进行全自动 OSINT 情报采集，结合加权风险评分算法（WRAS）与大模型 AI 分析，输出结构化的风险研判报告，辅助一线反诈民警快速决策。
+当前很多大学生在求职过程中，在小红书、微信群、私聊等"非公开场景"中被看似真实的招聘信息诱导，如"高薪内推""付费培训包入职"等。这类诈骗往往没有明确的网站，传统反诈手段难以及时识别。
+
+**慧眼**从更底层去分析——招聘行为本身有没有诈骗特征。
 
 **核心能力：**
 
-- 自动采集域名注册、SSL 证书、服务器地理位置、页面内容、搜索引擎舆情等多维情报
-- 基于业务专家权重的 WRAS 评分引擎，输出 0~100 分的量化风险值
-- 双 AI 引擎（Gemini / DeepSeek）深度语义分析与视觉仿冒检测
-- 四级风险分层（RED / ORANGE / YELLOW / GREEN）+ 对应警务处置预案
-- XAI 可解释性热力图，呈现各维度风险贡献
+- **四种输入方式**：招聘信息文本 / 聊天记录 / 公司名称 / 网站链接
+- **三层分析引擎**：规则关键词匹配 + 正则模式识别 + AI 语义深度分析
+- **企业信息核验**：名称模式分析 + 行业风险匹配 + AI 辅助研判
+- **四大诈骗类型识别**：付费培训诈骗 / 虚假内推诈骗 / 高薪诱导诈骗 / 信息盗取诈骗
+- **证据链生成**：自动标注来源（话术分析/模式匹配/企业核验/AI分析）和证据强度
+- **涉诈信息情报库**：分析记录自动沉淀，高风险企业累计追踪，支持关联查询
+- **数据看板**：诈骗类型分布、7天趋势、风险等级分布、高频涉诈企业 TOP 10
+- **反诈宣教**：高发预警（基于系统实时数据）、典型案例详解、求职防诈五字诀
+- **网站链接分析**：自动 OSINT 采集（域名/SSL/服务器/舆情）+ WRAS 评分 + AI 视觉分析
 
 ---
 
 ## 技术架构
 
 ```
-URL 输入
+用户输入（招聘信息 / 聊天记录 / 公司名称 / 网站链接）
   ↓
-[模块一] OSINT 情报采集层（并行异步）
-  ├── DomainIntelCollector   — WHOIS / 域名年龄 / ICP 备案（工信部官方 API）
-  ├── SSLIntelCollector      — SSL 证书有效性 / 签发机构 / 自签名检测
-  ├── GeoIPCollector         — 服务器 IP 地理归属 / ISP / CDN 识别
-  ├── PageContentCollector   — Playwright 全页采集（降级 httpx + BeautifulSoup）
-  └── SentimentCollector     — Bing 搜索引擎舆情采集 / 负面关键词统计
+┌──────────────────────────────────────────────────┐
+│ 开源情报采集层（OSINT）                            │
+│  ├── 企业信息核验（名称模式 + 行业风险）            │
+│  ├── 招聘话术分析（50+ 关键词 + 5 种正则模式）      │
+│  └── 网络舆情 / OSINT 采集（URL 分析时）            │
+└──────────────────────────────────────────────────┘
   ↓
-[模块二] 特征工程层
-  ├── 域名维度：注册时长归一化、ICP 缺失、WHOIS 隐私、SSL 异常
-  ├── 网络维度：境外服务器、CDN 规避行为
-  ├── 内容维度：高危话术 NLP 检测、pHash 钓鱼视觉相似度、资源异常率
-  └── 舆情维度：负面情感极性、投诉量归一化、黑名单命中
+┌──────────────────────────────────────────────────┐
+│ 智能分析与研判层（核心）                            │
+│  ① 规则识别（关键词 / 行为特征 / 正则模式）         │
+│  ② AI 语义分析（Gemini / DeepSeek 双引擎）         │
+│  ③ 多源数据融合（话术 45% + 企业 20% + AI 35%）    │
+└──────────────────────────────────────────────────┘
   ↓
-[模块三] WRAS 风险评分引擎
-  公式：Final_Score = Σ(W_i × F_i × 100) × C_trust
-  ├── W_i：业务专家权重（12 维，总和 = 1.0）
-  ├── F_i：特征向量（0~1 归一化）
-  └── C_trust：置信度系数（时效衰减 × 多源验证加成）
+┌──────────────────────────────────────────────────┐
+│ 风险判定层                                        │
+│  ├── 诈骗类型识别（付费培训 / 内推 / 高薪 / 信息盗取）│
+│  ├── 风险等级评估（HIGH / MEDIUM / LOW / SAFE）     │
+│  └── 证据链生成（来源标注 + 强度评级）              │
+└──────────────────────────────────────────────────┘
   ↓
-[模块四] AI 智能分析层
-  ├── 内容语义分析 — 欺诈类型识别、关键话术提取
-  ├── 视觉分析     — 截图仿冒检测（Gemini Vision）
-  └── 侦查报告生成 — 结构化专业研判报告
+┌──────────────────────────────────────────────────┐
+│ 结果输出层                                        │
+│  风险提示 + AI 决策建议 + 防范提示                  │
+└──────────────────────────────────────────────────┘
   ↓
-[模块五] 决策支持层
-  ├── 四级风险分层（RED ≥ 80 / ORANGE 60~79 / YELLOW 40~59 / GREEN < 40）
-  ├── 对应警务处置预案（立即下架 / 监控跟进 / 深度侦查 / 存档）
-  └── XAI 可解释热力图（各特征风险贡献可视化）
-  ↓
-FastAPI REST API  +  React 可视化前端（Web）/ Streamlit 可视化前端（轻量部署）
+┌─────────────────────┐  ┌─────────────────────────┐
+│ 涉诈信息情报库       │  │ 反诈宣教模块             │
+│ 数据沉淀 / 关联查询  │  │ 高频预警 / 案例展示      │
+│ 统计分析 / 可视化    │  │ 点对点防范提醒           │
+└─────────────────────┘  └─────────────────────────┘
 ```
-
----
-
-## 核心模块说明
-
-### 模块一：OSINT 情报采集（`osint_collector.py`）
-
-所有采集器通过 `asyncio.gather()` 并行执行，总采集时间取决于最慢的单项。
-
-| 采集器 | 数据来源 | 关键字段 |
-|--------|---------|---------|
-| DomainIntelCollector | python-whois / 工信部 ICP API | 域名年龄、注册商、WHOIS 隐私、备案号 |
-| SSLIntelCollector | 直连 443 端口 TLS 握手 | 证书有效性、签发机构、过期天数、自签名 |
-| GeoIPCollector | ip-api.com | 服务器国家、ISP、CDN 标识 |
-| PageContentCollector | Playwright（降级 httpx） | 页面文本、截图、重定向链、资源异常率 |
-| SentimentCollector | Bing 搜索引擎 | 搜索摘要、负面结果计数 |
-
-**ICP 查询说明：** 优先调用工信部官方接口 `hlwicpfwc.miit.gov.cn`，连通性有保障，查询结果权威可信。
-
-### 模块二：特征工程（`feature_engineer.py`）
-
-将原始情报归一化为 12 维特征向量，值域 `[0, 1]`，越高代表风险越大。
-
-- **域名年龄**：注册 ≤ 30 天 → 0.95，≤ 90 天 → 0.75，≤ 365 天 → 0.4，> 3 年 → 0.05
-- **关键词 NLP**：高危词（冒充公检法/安全账户等）权重 1.0，中危 0.5，低危 0.2
-- **pHash 视觉相似度**：与已知官方页面哈希库比对，检测仿冒
-- **AI 融合策略**：取 `max(规则评分, AI评分)`，最小化漏报
-
-### 模块三：WRAS 评分引擎（`wras_engine.py`）
-
-```
-Raw_Score  = Σ(W_i × F_i × 100)          # 加权原始分
-C_trust    = 时效系数 × 多源加成            # 置信度（0.5~1.0）
-Final_Score = Raw_Score × C_trust          # 最终分（上限 100）
-```
-
-特殊规则：原始分 ≥ 85 时跳过置信度折扣（极高风险不打折）。
-
-置信度衰减参数：情报超过 72 小时后开始衰减，半衰期 72 小时，最低系数 0.5。
-
-### 模块四：AI 分析层（`gemini_analyzer.py`）
-
-| 分析器 | 功能 | 支持引擎 |
-|--------|------|---------|
-| GeminiContentAnalyzer | 页面文本语义分析，识别欺诈类型 | Gemini / DeepSeek |
-| GeminiVisionAnalyzer | 截图视觉分析，检测仿冒目标 | Gemini（仅） |
-| GeminiReportGenerator | 生成结构化专业侦查报告 | Gemini / DeepSeek |
-
-**引擎切换策略：** 默认 Gemini 优先，遇到限流或失败自动切换 DeepSeek；用户可在前端手动指定引擎。
-
----
-
-## WRAS 评分体系
-
-权重由反诈业务专家根据实战经验标定，当前配置：
-
-| 特征维度 | 权重 | 业务含义 |
-|---------|------|---------|
-| 风险话术密度 | 0.15 | 冒充公检法、安全账户、刷单返利等高危话术 |
-| 负面舆情强度 | 0.14 | 受害者投诉、媒体曝光、论坛举报 |
-| 钓鱼视觉相似度 | 0.12 | 仿冒银行、支付平台官方页面 |
-| ICP 备案缺失 | 0.10 | 无备案经营属违规，诈骗站点普遍特征 |
-| 投诉量归一化 | 0.09 | 搜索引擎负面结果数量 |
-| 域名注册时长 | 0.08 | 新域名（< 30 天）是强烈诈骗信号 |
-| 境外服务器 | 0.07 | 东南亚、欧洲等高风险地区 |
-| SSL 自签名 | 0.06 | 证书异常，正规站点极少使用 |
-| 资源加载异常 | 0.05 | 页面大量 404，结构可疑 |
-| WHOIS 信息隐藏 | 0.05 | 注册者身份刻意隐匿 |
-| 黑名单命中 | 0.05 | 命中已知涉诈域名库 |
-| CDN 规避行为 | 0.04 | 利用 CDN 隐藏真实 IP，规避溯源 |
-
-风险分级阈值：
-
-| 等级 | 分值 | 含义 | 处置 |
-|------|------|------|------|
-| 🔴 RED | ≥ 80 | 高危 | 立即下架，移交网安立案 |
-| 🟠 ORANGE | 60~79 | 中高风险 | 列入重点监控，协查跟进 |
-| 🟡 YELLOW | 40~59 | 疑似风险 | 扩大侦查，补充情报 |
-| 🟢 GREEN | < 40 | 暂无风险 | 存档备查 |
 
 ---
 
@@ -156,144 +69,119 @@ Final_Score = Raw_Score × C_trust          # 最终分（上限 100）
 ```
 .
 ├── backend/
-│   ├── main.py                   # FastAPI 服务入口 + Redis 任务队列
+│   ├── main.py                      # FastAPI 服务入口 + 所有 API 路由
 │   ├── models/
-│   │   └── schemas.py            # Pydantic 数据模型 + URL 格式校验
+│   │   └── schemas.py               # 数据模型（含招聘诈骗新模型）
 │   └── modules/
-│       ├── osint_collector.py    # OSINT 情报采集（五大采集器）
-│       ├── feature_engineer.py   # 特征工程与归一化
-│       ├── wras_engine.py        # WRAS 风险评分引擎
-│       ├── gemini_analyzer.py    # AI 分析（Gemini / DeepSeek）
-│       └── pipeline.py           # 流水线协调器
+│       ├── recruitment_analyzer.py   # 招聘话术分析（关键词 + 正则 + AI）
+│       ├── company_checker.py        # 企业信息核验（名称模式 + AI）
+│       ├── fraud_classifier.py       # 多源融合诈骗分类器
+│       ├── evidence_builder.py       # 结构化证据链生成器
+│       ├── intel_db.py               # SQLite 情报数据库
+│       ├── osint_collector.py        # OSINT 情报采集（URL 分析）
+│       ├── feature_engineer.py       # 特征工程
+│       ├── wras_engine.py            # WRAS 风险评分引擎
+│       ├── gemini_analyzer.py        # AI 分析（Gemini / DeepSeek）
+│       └── pipeline.py               # URL 分析流水线
 ├── config/
-│   └── settings.py               # 全局配置：权重、阈值、关键词库
-├── frontend/
-│   └── app.py                    # Streamlit 轻量前端（快速部署 / 云端部署用）
-├── web/                          # React 现代前端（推荐本地开发使用）
+│   └── settings.py                   # 全局配置
+├── web/                              # React 前端
 │   ├── src/
-│   │   ├── App.tsx               # 主界面组件（研判结果展示）
-│   │   ├── types.ts              # TypeScript 类型定义
-│   │   └── main.tsx              # 应用入口
-│   ├── vite.config.ts            # Vite 配置（/api 代理到 FastAPI）
+│   │   ├── App.tsx                   # 路由入口（React Router）
+│   │   ├── constants.ts              # 共享配置
+│   │   ├── types.ts                  # TypeScript 类型定义
+│   │   ├── components/
+│   │   │   └── common.tsx            # 通用组件
+│   │   └── pages/
+│   │       ├── AnalyzePage.tsx        # 风险识别页（/）
+│   │       ├── DatabasePage.tsx       # 情报库页（/database）
+│   │       ├── StatsPage.tsx          # 数据看板页（/stats）
+│   │       └── EducationPage.tsx      # 反诈宣教页（/education）
+│   ├── vite.config.ts
 │   └── package.json
+├── data/                             # SQLite 数据库（自动创建，已 gitignore）
 ├── requirements.txt
-└── .env.example                  # 环境变量示例（不含真实 Key）
+└── .env.example
 ```
 
 ---
 
 ## 快速启动
 
-**环境要求：Python 3.11+，Node.js 18+，Redis**
-
-### 方式一：React 前端 + FastAPI 后端（推荐）
+**环境要求：Python 3.11+，Node.js 18+**
 
 ```bash
-# 1. 安装 Python 依赖
+# 1. 克隆项目
+git clone <repo-url>
+cd Fraud_intel_system
+
+# 2. 安装 Python 依赖
 pip install -r requirements.txt
 
-# 2. 配置环境变量
+# 3. 配置环境变量
 cp .env.example .env
-# 编辑 .env，填入 API Key
+# 编辑 .env，填入至少一个 AI API Key（可选，不填则 AI 分析不可用，规则引擎仍正常工作）
 
-# 3. 启动 Redis（Windows）
-redis-server
-
-# 4. 启动 FastAPI 后端
+# 4. 启动后端（在项目根目录）
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
-# 5. 新开一个终端，安装并启动 React 前端
+# 5. 新开终端，启动前端
 cd web
 npm install
 npm run dev
-# 浏览器访问 http://localhost:5173
 ```
 
-### 方式二：Streamlit 轻量前端（无需 Node.js）
+然后浏览器访问 **http://localhost:5173**
 
-```bash
-# 完成步骤 1~3 后，直接启动 Streamlit
-streamlit run frontend/app.py
-```
+> **Redis**（可选）：如需异步任务功能，启动 `redis-server`。不启动也能正常使用，仅异步批量分析不可用。
 
-> **完整页面采集能力（推荐）：**
+> **Playwright**（可选，URL 分析用）：
 > ```bash
 > pip install playwright
 > playwright install chromium
 > ```
-> 未安装时自动降级为 httpx 采集，截图与 JS 特征不可用，其余功能正常。
 
 ---
 
-## 环境变量配置
+## 前端页面
 
-复制 `.env.example` 为 `.env` 并填入以下配置：
+| 路由 | 页面 | 功能 |
+|------|------|------|
+| `/` | 风险识别 | 四种输入方式，实时分析，风险评分 + 诈骗类型 + 证据链 + 防范建议 |
+| `/database` | 情报库 | 分析记录查询、高风险企业列表、按风险等级/关键词筛选 |
+| `/stats` | 数据看板 | 诈骗类型分布、7天趋势、风险等级分布、TOP 10 高频企业 |
+| `/education` | 反诈宣教 | 求职防诈五字诀、高发预警、典型案例、举报渠道 |
+
+---
+
+## API 接口
+
+服务启动后访问 `http://localhost:8000/api/docs` 查看完整 Swagger 文档。
+
+### 核心接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/fraud-analyze` | 慧眼招聘诈骗分析（支持四种输入类型） |
+| POST | `/api/analyze` | URL OSINT 分析（原有功能） |
+| POST | `/api/ai-analyze` | 按需 AI 深度分析 |
+| GET | `/api/intel/records` | 查询分析记录 |
+| GET | `/api/intel/companies` | 查询高风险企业 |
+| GET | `/api/intel/stats` | 情报库统计概览 |
+| GET | `/api/health` | 健康检查 |
+
+---
+
+## 环境变量
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
 | `GEMINI_API_KEY` | 二选一 | Google Gemini API Key |
 | `DEEPSEEK_API_KEY` | 二选一 | DeepSeek API Key |
-| `REDIS_URL` | 否 | Redis 连接地址，默认 `redis://localhost:6379/0` |
-| `CORS_ORIGINS` | 否 | 允许的前端来源，默认 `http://localhost:8501`，多个用逗号分隔 |
+| `REDIS_URL` | 否 | Redis 地址，默认 `redis://localhost:6379/0` |
+| `CORS_ORIGINS` | 否 | 允许的前端来源，默认包含 localhost |
 
----
-
-## API 接口文档
-
-服务启动后访问 `http://localhost:8000/api/docs` 查看完整 Swagger 文档。
-
-### 主要接口
-
-**同步分析**
-```
-POST /api/analyze
-```
-```json
-{
-  "url": "suspicious-site.com",
-  "priority": "normal",
-  "analyst_id": "P20240001",
-  "extra_keywords": ["安全账户", "资金核验"],
-  "ai_engine": "auto"
-}
-```
-
-**异步分析（适合批量）**
-```
-POST /api/analyze/async   → 返回 task_id
-GET  /api/task/{task_id}  → 查询结果（Redis 存储，24h 过期）
-```
-
-**批量分析**
-```
-POST /api/batch
-["url1.com", "url2.com", ...]   # 最多 10 个
-```
-
-**健康检查**
-```
-GET /api/health  → 返回服务状态 + Redis 连接状态
-```
-
----
-
-## 云端部署（Streamlit Cloud）
-
-1. Fork 本仓库
-2. 前往 [share.streamlit.io](https://share.streamlit.io) 用 GitHub 账号登录
-3. 选择仓库，Main file path 填 `frontend/app.py`
-4. 在 Secrets 中配置 `GEMINI_API_KEY` / `DEEPSEEK_API_KEY`
-5. 点击 Deploy
-
----
-
-## 扩展方向
-
-1. **模型升级**：接入 MacBERT / RoBERTa 中文分类模型替换规则 NLP，提升话术识别准确率
-2. **数据源扩展**：对接 12321 举报平台 API、国家反诈中心数据
-3. **知识图谱**：构建涉诈团伙关联图谱（域名 / IP / 手机号关联分析）
-4. **反制溯源**：结合 Maltego 进行深度溯源链分析
-5. **联动封堵**：对接运营商 / IDC 下架接口，实现一键自动化处置
+> 不配置任何 API Key 时，AI 分析功能不可用，但规则引擎（关键词 + 正则 + 企业核验）仍正常工作。
 
 ---
 
