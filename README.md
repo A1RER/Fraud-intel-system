@@ -2,6 +2,8 @@
 
 > 基于开源情报（OSINT）和 AI 的招聘诈骗智能识别系统，面向大学生求职场景，实现对可疑招聘信息的多维度分析、风险分级、证据链生成和反诈宣教。
 
+**在线体验：[https://fraud-analyzer-scy.tech](https://fraud-analyzer-scy.tech)**
+
 ---
 
 ## 系统概述
@@ -156,7 +158,7 @@ npm run dev
 
 ## API 接口
 
-服务启动后访问 `http://localhost:8000/api/docs` 查看完整 Swagger 文档。
+服务启动后访问 `http://localhost:8000/api/docs`（本地）或 [https://fraud-analyzer-scy.tech/api/docs](https://fraud-analyzer-scy.tech/api/docs)（线上）查看完整 Swagger 文档。
 
 ### 核心接口
 
