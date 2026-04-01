@@ -340,9 +340,9 @@ def get_stats() -> Dict:
 
     # 诈骗类型统计
     pattern_rows = conn.execute(
-        "SELECT fraud_type, total_count, high_count FROM fraud_patterns ORDER BY total_count DESC"
+        "SELECT fraud_type, total_count, high_count, recent_keywords FROM fraud_patterns ORDER BY total_count DESC"
     ).fetchall()
-    patterns = [dict(r) for r in pattern_rows]
+    patterns = [_row_to_dict(r) for r in pattern_rows]
 
     # 最近 7 天趋势
     trend = []
