@@ -14,7 +14,8 @@ env/
 
 # --- Packaging / build artifacts ---
 build/
-dist/
+# dist/ — 保留 web/dist 以便部署
+!web/dist/
 *.egg-info/
 .eggs/
 
