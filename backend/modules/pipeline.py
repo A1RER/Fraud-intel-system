@@ -28,6 +28,7 @@ class AnalysisPipeline:
 
     流程：
     URL → OSINT采集 → 特征工程 → WRAS评分 → 决策输出 → 结构化报告
+    AI 分析为按需调用，不阻塞主流程。
     """
     _ai_cache: OrderedDict = OrderedDict()
     _CACHE_MAX = 100
@@ -95,27 +96,27 @@ class AnalysisPipeline:
     async def run(self, request: AnalysisRequest) -> AnalysisResponse:
         report_id = f"RPT-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
         start_time = time.time()
-        
+
         logger.info(f"[PIPELINE] 开始分析 | report_id={report_id} | url={request.url}")
-        
+
         try:
             deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "")
-            ai_engine = request.ai_engine  # auto / deepseek
+            ai_engine = request.ai_engine
 
-            # 阶段一：OSINT 采集（总超时 60s，防止卡死）
-            logger.info("[PIPELINE] 阶段1/5: OSINT 情报采集")
+            # 阶段一：OSINT 采集（总超时 30s）
+            logger.info("[PIPELINE] 阶段1: OSINT 情报采集")
             try:
                 raw_intel = await asyncio.wait_for(
-                    OSINTCollector.collect(request.url), timeout=60
+                    OSINTCollector.collect(request.url), timeout=30
                 )
             except asyncio.TimeoutError:
-                raise RuntimeError("OSINT 情报采集超时（60s），请稍后重试")
+                raise RuntimeError("OSINT 情报采集超时（30s），请稍后重试")
 
-            # 阶段二：AI 内容分析（结果融入特征工程）
+            # 阶段二：AI 内容分析（仅在显式请求时执行）
             content_result = {}
             engine_available = ai_engine in ("auto", "deepseek") and deepseek_api_key
             if engine_available:
-                logger.info(f"[PIPELINE] 阶段2/5: AI 内容分析 (engine={ai_engine})")
+                logger.info(f"[PIPELINE] 阶段2: AI 内容分析 (engine={ai_engine})")
                 try:
                     content_result = AIContentAnalyzer.analyze(
                         raw_intel.page_text or "", raw_intel.page_title or "",
@@ -124,20 +125,18 @@ class AnalysisPipeline:
                 except Exception as e:
                     logger.warning(f"[PIPELINE] AI 分析失败（降级为纯规则）: {e}")
 
-            # 阶段三：特征工程（融合 AI 结果）
-            logger.info("[PIPELINE] 阶段3/5: 特征提取与信号增强")
+            # 阶段三：特征工程 + WRAS 评分（纯计算，毫秒级）
+            logger.info("[PIPELINE] 阶段3: 特征提取 + WRAS 评分")
             features = FeatureEngineer.extract(
                 raw_intel, request.extra_keywords,
                 ai_content=content_result,
             )
 
-            # 阶段四：WRAS 评分
-            logger.info("[PIPELINE] 阶段4/5: WRAS 风险评分计算")
             source_count = 1 + (1 if raw_intel.search_snippets else 0) + \
                            (1 if raw_intel.social_mentions else 0) + \
                            (1 if raw_intel.complaint_count > 0 else 0)
             if content_result.get("risk_score", 0) > 0:
-                source_count += 1  # AI 也算一个情报源，提升置信度
+                source_count += 1
 
             wras_result = self.wras_engine.score(
                 features,
@@ -145,12 +144,10 @@ class AnalysisPipeline:
                 source_count=source_count,
             )
 
-            # 阶段五：决策支持 + AI 报告
-            logger.info("[PIPELINE] 阶段5/5: 生成决策处置预案与 AI 报告")
+            # 阶段四：决策输出
             disposal_data = DISPOSAL_PLANS[wras_result.risk_level.value]
             disposal = DisposalPlan(**disposal_data)
 
-            # 构建报告上下文（始终构建，供即时或按需 AI 分析使用）
             report_context = {
                 "url": request.url,
                 "domain": raw_intel.domain,
@@ -180,12 +177,12 @@ class AnalysisPipeline:
             # 缓存供后续按需 AI 分析
             self._cache_for_ai(report_id, raw_intel, report_context)
 
+            # AI 报告仅在显式请求时内联生成
             ai_result = None
-            ai_start = time.time()
             if engine_available:
+                ai_start = time.time()
                 try:
                     ai_report_text, report_provider = AIReportGenerator.generate(report_context, engine=ai_engine)
-
                     content_provider = content_result.get("_provider", "")
                     actual_provider = report_provider or content_provider or DEEPSEEK_MODEL
 
@@ -203,7 +200,6 @@ class AnalysisPipeline:
                 except Exception as e:
                     logger.warning(f"[PIPELINE] AI 报告生成失败: {e}")
 
-            # 组装报告
             report = IntelReport(
                 report_id=report_id,
                 url=request.url,
@@ -213,21 +209,21 @@ class AnalysisPipeline:
                 disposal=disposal,
                 ai_analysis=ai_result,
             )
-            
+
             elapsed = round(time.time() - start_time, 2)
             logger.success(
                 f"[PIPELINE] 分析完成 | report_id={report_id} | "
                 f"score={wras_result.final_score:.1f} | "
                 f"level={wras_result.risk_level} | elapsed={elapsed}s"
             )
-            
+
             return AnalysisResponse(
                 success=True,
                 report_id=report_id,
                 report=report,
                 elapsed_s=elapsed,
             )
-            
+
         except Exception as e:
             elapsed = round(time.time() - start_time, 2)
             logger.error(f"[PIPELINE] 分析失败 | report_id={report_id} | error={e}")

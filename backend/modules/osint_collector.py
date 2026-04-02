@@ -1,11 +1,13 @@
 # backend/modules/osint_collector.py
 """
 模块一：自动化情报采集
-采集链路：DNS/WHOIS -> SSL -> 服务器地理 -> 页面内容(Playwright) -> 外部舆情
+采集链路：DNS/WHOIS -> SSL -> 服务器地理 -> 页面内容 -> 外部舆情
+所有采集器均有严格超时，防止单个慢查询拖垮整条链路。
 """
 import asyncio
 import base64
 import hashlib
+import os
 import re
 import socket
 import ssl
@@ -16,15 +18,19 @@ from urllib.parse import urlparse
 import httpx
 from loguru import logger
 
-try:
-    from playwright.async_api import async_playwright, Browser
-    PLAYWRIGHT_AVAILABLE = True
-except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
-    logger.warning("Playwright 未安装，将使用 httpx 降级采集")
-
 from backend.models.schemas import RawIntelligence
 from config.settings import BLACKLIST_DOMAINS
+
+# 低配服务器（1vCPU/2GB）下禁用 Playwright，用 httpx 轻量采集
+# 如需启用，设置环境变量 USE_PLAYWRIGHT=1
+_USE_PLAYWRIGHT = os.getenv("USE_PLAYWRIGHT", "").strip() in ("1", "true", "yes")
+PLAYWRIGHT_AVAILABLE = False
+if _USE_PLAYWRIGHT:
+    try:
+        from playwright.async_api import async_playwright
+        PLAYWRIGHT_AVAILABLE = True
+    except ImportError:
+        logger.warning("Playwright 未安装，将使用 httpx 采集")
 
 
 def _normalize_url(url: str) -> str:
@@ -64,56 +70,55 @@ class DomainIntelCollector:
             "icp_record": None,
             "server_ip": None,
         }
-        try:
-            import whois
-            w = await asyncio.wait_for(
-                asyncio.to_thread(whois.whois, domain), timeout=8
-            )
-            result["domain_age_days"] = _calc_domain_age(w.creation_date)
-            result["registrar"] = str(w.registrar) if w.registrar else None
-            name = str(w.name or "").lower()
-            if any(kw in name for kw in ["privacy", "protected", "proxy", "redacted"]):
-                result["whois_privacy"] = True
-        except asyncio.TimeoutError:
-            logger.warning(f"WHOIS 查询超时 [{domain}]")
-        except Exception as e:
-            logger.warning(f"WHOIS 查询失败 [{domain}]: {e}")
 
-        try:
-            result["server_ip"] = await asyncio.wait_for(
-                asyncio.to_thread(socket.gethostbyname, domain), timeout=5
-            )
-        except asyncio.TimeoutError:
-            logger.warning(f"DNS 查询超时 [{domain}]")
-        except Exception:
-            pass
+        # WHOIS + DNS 并行
+        async def _whois():
+            try:
+                import whois
+                w = await asyncio.wait_for(
+                    asyncio.to_thread(whois.whois, domain), timeout=6
+                )
+                result["domain_age_days"] = _calc_domain_age(w.creation_date)
+                result["registrar"] = str(w.registrar) if w.registrar else None
+                name = str(w.name or "").lower()
+                if any(kw in name for kw in ["privacy", "protected", "proxy", "redacted"]):
+                    result["whois_privacy"] = True
+            except asyncio.TimeoutError:
+                logger.warning(f"WHOIS 查询超时 [{domain}]")
+            except Exception as e:
+                logger.warning(f"WHOIS 查询失败 [{domain}]: {e}")
 
-        result["icp_record"] = await DomainIntelCollector._query_icp(domain)
+        async def _dns():
+            try:
+                result["server_ip"] = await asyncio.wait_for(
+                    asyncio.to_thread(socket.gethostbyname, domain), timeout=4
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"DNS 查询超时 [{domain}]")
+            except Exception:
+                pass
+
+        async def _icp():
+            result["icp_record"] = await DomainIntelCollector._query_icp(domain)
+
+        await asyncio.gather(_whois(), _dns(), _icp(), return_exceptions=True)
         return result
 
     @staticmethod
     async def _query_icp(domain: str) -> Optional[str]:
-        """
-        通过工信部官方 API 查询域名 ICP 备案信息。
-        查询成功返回备案号；未备案返回 None；接口异常也返回 None 并记录日志。
-        """
         try:
-            result = await DomainIntelCollector._query_icp_miit(domain)
-            if result:
-                logger.info(f"[ICP] {domain} 已备案: {result}")
-                return result
-            logger.info(f"[ICP] {domain} 工信部查询成功，该域名无备案记录")
+            return await asyncio.wait_for(
+                DomainIntelCollector._query_icp_miit(domain), timeout=6
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"[ICP] {domain} 查询超时")
             return None
         except Exception as e:
-            logger.warning(f"[ICP] {domain} 工信部接口连接正常但查询未返回结果: {e}")
+            logger.warning(f"[ICP] {domain} 查询失败: {e}")
             return None
 
     @staticmethod
     async def _query_icp_miit(domain: str) -> Optional[str]:
-        """
-        工信部 beian.miit.gov.cn 官方查询。
-        流程：获取 token → 查询备案信息 → 返回备案号。
-        """
         base_url = "https://hlwicpfwc.miit.gov.cn/icpproject_query/api"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -121,41 +126,27 @@ class DomainIntelCollector:
             "Referer": "https://beian.miit.gov.cn/",
             "Content-Type": "application/x-www-form-urlencoded",
         }
-
-        async with httpx.AsyncClient(headers=headers, timeout=10) as client:
-            # 步骤 1：获取 auth token
+        async with httpx.AsyncClient(headers=headers, timeout=5) as client:
             token_resp = await client.post(
                 f"{base_url}/auth",
-                data={"authKey": "dGVzdA==", "timeStamp": ""},  # 公开 authKey
+                data={"authKey": "dGVzdA==", "timeStamp": ""},
             )
             if token_resp.status_code != 200:
                 return None
-            token_data = token_resp.json()
-            token = token_data.get("params", {}).get("bussiness")
+            token = token_resp.json().get("params", {}).get("bussiness")
             if not token:
                 return None
 
-            # 步骤 2：用 token 查询备案信息
             query_resp = await client.post(
                 f"{base_url}/icpAbbreviateInfo/queryByCondition",
                 headers={"token": token, "Content-Type": "application/json"},
-                json={
-                    "pageNum": 1,
-                    "pageSize": 1,
-                    "unitName": domain,
-                },
+                json={"pageNum": 1, "pageSize": 1, "unitName": domain},
             )
             if query_resp.status_code != 200:
                 return None
-            query_data = query_resp.json()
-
-            # 解析返回数据
-            params = query_data.get("params", {})
-            items = params.get("list", [])
+            items = query_resp.json().get("params", {}).get("list", [])
             if not items:
                 return None
-
-            # 返回备案号（如 "京ICP备12345678号"）
             icp_no = items[0].get("serviceLicence") or items[0].get("natureName")
             return icp_no if icp_no else None
 
@@ -174,7 +165,7 @@ class SSLIntelCollector:
         try:
             ctx = ssl.create_default_context()
             conn = asyncio.open_connection(domain, port, ssl=ctx)
-            _, writer = await asyncio.wait_for(conn, timeout=10)
+            _, writer = await asyncio.wait_for(conn, timeout=6)
             cert = writer.get_extra_info("ssl_object").getpeercert()
             writer.close()
             await writer.wait_closed()
@@ -205,7 +196,7 @@ class GeoIPCollector:
         if not ip:
             return result
         try:
-            async with httpx.AsyncClient(timeout=8) as client:
+            async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.get(
                     f"http://ip-api.com/json/{ip}",
                     params={"fields": "status,country,countryCode,isp,org"}
@@ -224,12 +215,10 @@ class GeoIPCollector:
 
 
 class PageContentCollector:
-    """页面内容采集"""
+    """页面内容采集（默认 httpx 轻量模式）"""
 
     USER_AGENTS = {
-        "pc":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "android": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36",
-        "ios":     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+        "pc": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     }
 
     @classmethod
@@ -252,23 +241,12 @@ class PageContentCollector:
                 redirect_chain = []
                 page.on("response", lambda r: redirect_chain.append(r.url)
                         if r.status in (301, 302, 307, 308) else None)
-                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=12000)
                 result["redirect_chain"] = redirect_chain[:5]
-                screenshot = await page.screenshot(full_page=False)
-                result["screenshot_b64"] = base64.b64encode(screenshot).decode()
                 html = await page.content()
                 result["page_html"] = html[:50000]
                 result["page_title"] = await page.title()
                 result["page_text"] = await page.inner_text("body")
-                js_result = await page.evaluate("""() => {
-                    const resources = performance.getEntriesByType('resource');
-                    return {
-                        total: resources.length,
-                        errors: resources.filter(r => r.responseStatus >= 400 || r.responseStatus === 0).length
-                    };
-                }""")
-                result["total_resources"] = js_result.get("total", 0)
-                result["resource_errors"] = js_result.get("errors", 0)
                 await browser.close()
         except Exception as e:
             logger.error(f"Playwright 采集失败 [{url}]: {e}")
@@ -280,7 +258,7 @@ class PageContentCollector:
         try:
             from bs4 import BeautifulSoup
             headers = {"User-Agent": cls.USER_AGENTS["pc"]}
-            async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=15) as client:
+            async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=10) as client:
                 resp = await client.get(url)
                 html = resp.text
                 result["page_html"] = html[:50000]
@@ -289,7 +267,7 @@ class PageContentCollector:
                 result["page_title"] = soup.title.string if soup.title else ""
                 result["page_text"] = soup.get_text(separator=" ", strip=True)[:10000]
         except Exception as e:
-            logger.error(f"httpx 降级采集失败 [{url}]: {e}")
+            logger.error(f"httpx 采集失败 [{url}]: {e}")
         return result
 
     @staticmethod
@@ -304,7 +282,6 @@ class PageContentCollector:
 class SentimentCollector:
     """外部舆情采集 —— 通过 Bing 搜索获取真实互联网舆情"""
 
-    # 负面关键词，用于拼接搜索词和判断搜索结果极性
     _NEG_KEYWORDS = ["诈骗", "骗局", "投诉", "跑路", "无法提现", "骗子", "举报", "曝光"]
 
     @classmethod
@@ -326,23 +303,12 @@ class SentimentCollector:
 
     @classmethod
     async def _bing_search(cls, domain: str) -> tuple:
-        """
-        通过 Bing 搜索采集真实舆情。
-        返回 (snippets 列表, 负面结果计数)。
-        """
         all_snippets: List[str] = []
         neg_count = 0
-
-        # 两轮搜索：通用搜索 + 负面关键词定向搜索
-        queries = [
-            domain,
-            f"{domain} 诈骗 OR 投诉 OR 骗局 OR 跑路",
-        ]
 
         try:
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.warning("BeautifulSoup 未安装，舆情采集跳过")
             return all_snippets, neg_count
 
         headers = {
@@ -350,42 +316,45 @@ class SentimentCollector:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
 
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=8) as client:
-            for query in queries:
-                try:
-                    resp = await client.get(
-                        "https://www.bing.com/search",
-                        params={"q": query, "count": "10"},
-                    )
-                    if resp.status_code != 200:
-                        logger.warning(f"Bing 搜索返回 {resp.status_code}，query={query}")
+        # 两个查询并发发出，不再串行等待
+        queries = [
+            domain,
+            f"{domain} 诈骗 OR 投诉 OR 骗局 OR 跑路",
+        ]
+
+        async def _search_one(client: httpx.AsyncClient, query: str):
+            nonlocal neg_count
+            try:
+                resp = await client.get(
+                    "https://www.bing.com/search",
+                    params={"q": query, "count": "10"},
+                )
+                if resp.status_code != 200:
+                    return
+                soup = BeautifulSoup(resp.text, "html.parser")
+                for item in soup.select("li.b_algo"):
+                    caption = item.select_one("div.b_caption p, p")
+                    if not caption:
                         continue
+                    text = caption.get_text(strip=True)
+                    if not text or len(text) < 10:
+                        continue
+                    if text not in all_snippets:
+                        all_snippets.append(text)
+                    if any(kw in text for kw in cls._NEG_KEYWORDS):
+                        neg_count += 1
+            except Exception as e:
+                logger.warning(f"Bing 搜索失败 [query={query}]: {e}")
 
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                    # Bing 搜索结果摘要在 <li class="b_algo"> 下的 <p> 或 <div class="b_caption">
-                    for item in soup.select("li.b_algo"):
-                        caption = item.select_one("div.b_caption p, p")
-                        if not caption:
-                            continue
-                        text = caption.get_text(strip=True)
-                        if not text or len(text) < 10:
-                            continue
-                        # 去重
-                        if text not in all_snippets:
-                            all_snippets.append(text)
-                        # 统计负面结果
-                        if any(kw in text for kw in cls._NEG_KEYWORDS):
-                            neg_count += 1
-
-                except Exception as e:
-                    logger.warning(f"Bing 搜索失败 [query={query}]: {e}")
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=6) as client:
+            await asyncio.gather(*[_search_one(client, q) for q in queries])
 
         logger.info(f"[舆情] {domain} 采集到 {len(all_snippets)} 条摘要，负面 {neg_count} 条")
         return all_snippets, neg_count
 
 
 class OSINTCollector:
-    """情报采集协调器"""
+    """情报采集协调器 —— 所有子采集器全部并行"""
 
     @classmethod
     async def collect(cls, url: str) -> RawIntelligence:
@@ -393,6 +362,7 @@ class OSINTCollector:
         domain = _extract_domain(url)
         logger.info(f"[OSINT] 开始采集: {url} | domain={domain}")
 
+        # 第一轮：四路并行
         results = await asyncio.gather(
             DomainIntelCollector.collect(domain),
             SSLIntelCollector.collect(domain),
@@ -402,13 +372,17 @@ class OSINTCollector:
         )
 
         def safe(r, default):
+            if isinstance(r, Exception):
+                logger.warning(f"[OSINT] 采集器异常: {r}")
+                return default
             return r if isinstance(r, dict) else default
 
-        domain_r   = safe(results[0], {})
-        ssl_r      = safe(results[1], {})
-        page_r     = safe(results[2], PageContentCollector._empty_result())
+        domain_r    = safe(results[0], {})
+        ssl_r       = safe(results[1], {})
+        page_r      = safe(results[2], PageContentCollector._empty_result())
         sentiment_r = safe(results[3], {})
 
+        # 第二轮：GeoIP（依赖 IP 结果）
         server_ip = domain_r.get("server_ip")
         geo_r = await GeoIPCollector.collect(server_ip) if server_ip else {}
 
