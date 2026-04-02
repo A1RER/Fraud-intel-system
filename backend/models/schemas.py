@@ -185,7 +185,7 @@ class FraudAnalysisRequest(BaseModel):
     company_name:   Optional[str] = None         # 补充：公司名称
     url:            Optional[str] = None         # 补充：相关链接
     extra_keywords: List[str]     = []
-    ai_engine:      str           = "auto"       # none / auto / deepseek
+    ai_engine:      str           = "none"       # none / auto / deepseek
 
     @field_validator("content")
     @classmethod
