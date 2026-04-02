@@ -66,17 +66,25 @@ class DomainIntelCollector:
         }
         try:
             import whois
-            w = await asyncio.to_thread(whois.whois, domain)
+            w = await asyncio.wait_for(
+                asyncio.to_thread(whois.whois, domain), timeout=8
+            )
             result["domain_age_days"] = _calc_domain_age(w.creation_date)
             result["registrar"] = str(w.registrar) if w.registrar else None
             name = str(w.name or "").lower()
             if any(kw in name for kw in ["privacy", "protected", "proxy", "redacted"]):
                 result["whois_privacy"] = True
+        except asyncio.TimeoutError:
+            logger.warning(f"WHOIS 查询超时 [{domain}]")
         except Exception as e:
             logger.warning(f"WHOIS 查询失败 [{domain}]: {e}")
 
         try:
-            result["server_ip"] = socket.gethostbyname(domain)
+            result["server_ip"] = await asyncio.wait_for(
+                asyncio.to_thread(socket.gethostbyname, domain), timeout=5
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"DNS 查询超时 [{domain}]")
         except Exception:
             pass
 
@@ -244,7 +252,7 @@ class PageContentCollector:
                 redirect_chain = []
                 page.on("response", lambda r: redirect_chain.append(r.url)
                         if r.status in (301, 302, 307, 308) else None)
-                await page.goto(url, wait_until="networkidle", timeout=30000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 result["redirect_chain"] = redirect_chain[:5]
                 screenshot = await page.screenshot(full_page=False)
                 result["screenshot_b64"] = base64.b64encode(screenshot).decode()
@@ -342,7 +350,7 @@ class SentimentCollector:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
 
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=12) as client:
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=8) as client:
             for query in queries:
                 try:
                     resp = await client.get(

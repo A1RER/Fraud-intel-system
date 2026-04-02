@@ -22,7 +22,7 @@ def _deepseek_key():
     return os.getenv("DEEPSEEK_API_KEY", "")
 
 def _get_deepseek():
-    return OpenAI(api_key=_deepseek_key(), base_url=DEEPSEEK_BASE_URL)
+    return OpenAI(api_key=_deepseek_key(), base_url=DEEPSEEK_BASE_URL, timeout=30)
 
 
 # ── 统一文本生成 ──────────────────────────────────────────────

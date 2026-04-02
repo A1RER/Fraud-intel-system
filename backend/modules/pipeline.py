@@ -3,6 +3,7 @@
 情报分析流水线主控器
 采集 -> 特征提取 -> WRAS评分 -> 决策输出
 """
+import asyncio
 import os
 import uuid
 import time
@@ -101,9 +102,14 @@ class AnalysisPipeline:
             deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "")
             ai_engine = request.ai_engine  # auto / deepseek
 
-            # 阶段一：OSINT 采集
+            # 阶段一：OSINT 采集（总超时 60s，防止卡死）
             logger.info("[PIPELINE] 阶段1/5: OSINT 情报采集")
-            raw_intel = await OSINTCollector.collect(request.url)
+            try:
+                raw_intel = await asyncio.wait_for(
+                    OSINTCollector.collect(request.url), timeout=60
+                )
+            except asyncio.TimeoutError:
+                raise RuntimeError("OSINT 情报采集超时（60s），请稍后重试")
 
             # 阶段二：AI 内容分析（结果融入特征工程）
             content_result = {}
