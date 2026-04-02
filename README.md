@@ -41,7 +41,7 @@
 ┌──────────────────────────────────────────────────┐
 │ 智能分析与研判层（核心）                            │
 │  ① 规则识别（关键词 / 行为特征 / 正则模式）         │
-│  ② AI 语义分析（Gemini / DeepSeek 双引擎）         │
+│  ② AI 语义分析（DeepSeek 引擎）                    │
 │  ③ 多源数据融合（话术 45% + 企业 20% + AI 35%）    │
 └──────────────────────────────────────────────────┘
   ↓
@@ -83,7 +83,7 @@
 │       ├── osint_collector.py        # OSINT 情报采集（URL 分析）
 │       ├── feature_engineer.py       # 特征工程
 │       ├── wras_engine.py            # WRAS 风险评分引擎
-│       ├── gemini_analyzer.py        # AI 分析（Gemini / DeepSeek）
+│       ├── ai_analyzer.py            # AI 分析（DeepSeek）
 │       └── pipeline.py               # URL 分析流水线
 ├── config/
 │   └── settings.py                   # 全局配置
@@ -178,8 +178,7 @@ npm run dev
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `GEMINI_API_KEY` | 二选一 | Google Gemini API Key |
-| `DEEPSEEK_API_KEY` | 二选一 | DeepSeek API Key |
+| `DEEPSEEK_API_KEY` | 否 | DeepSeek API Key（AI 分析功能） |
 | `REDIS_URL` | 否 | Redis 地址，默认 `redis://localhost:6379/0` |
 | `CORS_ORIGINS` | 否 | 允许的前端来源，默认包含 localhost |
 

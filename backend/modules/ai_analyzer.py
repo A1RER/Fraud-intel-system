@@ -1,25 +1,14 @@
-# backend/modules/gemini_analyzer.py
+# backend/modules/ai_analyzer.py
 """
-模块五：AI 智能分析
-支持双引擎：Gemini（主） + DeepSeek（备选）
-- Gemini 限流 / 不可用时自动切换 DeepSeek
-- 视觉分析仅 Gemini 支持
+模块五：AI 智能分析（DeepSeek 引擎）
+- 内容语义分析 + 侦查报告生成
 """
 import os
 import json
-import base64
 from typing import Dict
 from loguru import logger
 
-from config.settings import GEMINI_MODEL, DEEPSEEK_MODEL, DEEPSEEK_BASE_URL
-
-# ── SDK 可用性检测 ────────────────────────────────────────────
-try:
-    from google import genai
-    from google.genai import types as gemini_types
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
+from config.settings import DEEPSEEK_MODEL, DEEPSEEK_BASE_URL
 
 try:
     from openai import OpenAI
@@ -29,66 +18,39 @@ except ImportError:
 
 
 # ── 客户端工厂 ────────────────────────────────────────────────
-def _gemini_key():
-    return os.getenv("GEMINI_API_KEY", "")
-
 def _deepseek_key():
     return os.getenv("DEEPSEEK_API_KEY", "")
-
-def _get_gemini():
-    return genai.Client(api_key=_gemini_key())
 
 def _get_deepseek():
     return OpenAI(api_key=_deepseek_key(), base_url=DEEPSEEK_BASE_URL)
 
 
-# ── 统一文本生成（支持用户选择引擎）──────────────────────────
+# ── 统一文本生成 ──────────────────────────────────────────────
 def _call_llm(prompt: str, max_tokens: int = 1024, temperature: float = 0.1,
               engine: str = "auto") -> tuple:
     """
     返回 (response_text, provider_name)
-    engine: "auto" = Gemini优先DeepSeek备选, "gemini" = 仅Gemini, "deepseek" = 仅DeepSeek
+    engine: "auto" / "deepseek" 均走 DeepSeek
     """
-    try_gemini = engine in ("auto", "gemini")
-    try_deepseek = engine in ("auto", "deepseek")
+    if not DEEPSEEK_AVAILABLE or not _deepseek_key():
+        raise RuntimeError("DeepSeek AI 引擎不可用（缺少 API Key 或 openai 包）")
 
-    # 尝试 Gemini
-    if try_gemini and GEMINI_AVAILABLE and _gemini_key():
-        try:
-            client = _get_gemini()
-            resp = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=gemini_types.GenerateContentConfig(
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                ),
-            )
-            text = resp.text
-            if text:
-                return text.strip(), f"Gemini ({GEMINI_MODEL})"
-        except Exception as e:
-            if engine == "gemini":
-                raise RuntimeError(f"Gemini 调用失败: {e}")
-            logger.warning(f"[AI] Gemini 调用失败，切换 DeepSeek: {e}")
+    try:
+        client = _get_deepseek()
+        resp = client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        text = resp.choices[0].message.content
+        if text:
+            return text.strip(), f"DeepSeek ({DEEPSEEK_MODEL})"
+    except Exception as e:
+        logger.error(f"[AI] DeepSeek 调用失败: {e}")
+        raise RuntimeError(f"DeepSeek 调用失败: {e}")
 
-    # DeepSeek
-    if try_deepseek and DEEPSEEK_AVAILABLE and _deepseek_key():
-        try:
-            client = _get_deepseek()
-            resp = client.chat.completions.create(
-                model=DEEPSEEK_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            text = resp.choices[0].message.content
-            if text:
-                return text.strip(), f"DeepSeek ({DEEPSEEK_MODEL})"
-        except Exception as e:
-            logger.error(f"[AI] DeepSeek 调用失败: {e}")
-
-    raise RuntimeError(f"所选 AI 引擎不可用 (engine={engine})")
+    raise RuntimeError("DeepSeek 返回空结果")
 
 
 def _parse_json(raw: str) -> dict:
@@ -100,7 +62,6 @@ def _parse_json(raw: str) -> dict:
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        # JSON 被截断（max_tokens 触顶）：逐步向前找最后一个完整字段并补全
         for tail in ['",\n', '",', '"],', '"]', '},', '}']:
             idx = raw.rfind(tail)
             if idx > 0:
@@ -112,8 +73,8 @@ def _parse_json(raw: str) -> dict:
 
 
 # ── 内容语义分析 ──────────────────────────────────────────────
-class GeminiContentAnalyzer:
-    """页面文本语义级欺诈检测（双引擎）"""
+class AIContentAnalyzer:
+    """页面文本语义级欺诈检测"""
 
     SYSTEM_PROMPT = """你是一个专业的网络欺诈检测引擎。给定一个网站的页面文本，你需要深度分析其是否包含欺诈/诈骗内容。
 
@@ -159,68 +120,9 @@ class GeminiContentAnalyzer:
                     "reasoning": f"AI 分析失败：{e}", "_provider": ""}
 
 
-# ── 视觉分析（仅 Gemini，DeepSeek 不支持）────────────────────
-class GeminiVisionAnalyzer:
-    """网站截图视觉欺诈检测（仅 Gemini）"""
-
-    VISION_PROMPT = """你是一个专业的网站视觉欺诈检测引擎。请深度分析这张网站截图，判断它是否可能是欺诈/钓鱼网站。
-
-重点检查以下视觉维度：
-1. 品牌仿冒：是否仿冒银行、支付宝、微信、政府、知名电商等机构的 Logo/配色/UI布局
-2. 博彩赌博：是否包含筹码、老虎机、开奖动效、赔率展示等视觉元素
-3. 虚假投资：是否有K线图、收益曲线、VIP等级、充值按钮、"日收益XX%"等元素
-4. 制作质量：图片是否模糊/拼贴/水印未去除、排版是否混乱、字体是否统一
-5. 心理操控：是否有倒计时、红色警告框、"仅剩X名额"、弹窗遮挡等紧迫感设计
-6. 信任构建：是否有伪造的监管机构图标、虚假荣誉证书、刷量的用户评价截图
-
-请严格按以下 JSON 格式输出，不要输出任何其他内容：
-{
-  "visual_risk_score": 0.0到1.0的浮点数,
-  "is_phishing": true或false,
-  "impersonates": "仿冒的目标机构名称（如：工商银行、支付宝），无仿冒则为null",
-  "visual_features": ["每条详细描述一个可疑视觉特征及其风险含义，至少列出所有发现的特征"],
-  "description": "对截图的完整视觉分析，包含：页面整体布局描述、核心风险视觉元素、制作质量评估、与合法网站的对比差异（100字以上）"
-}"""
-
-    @classmethod
-    def analyze(cls, screenshot_b64: str, engine: str = "auto") -> Dict:
-        default = {"visual_risk_score": 0.0, "is_phishing": False, "impersonates": None,
-                    "visual_features": [], "description": "AI 视觉分析未执行"}
-
-        # 视觉分析仅 Gemini 支持；用户选择仅 DeepSeek 时跳过
-        if engine == "deepseek":
-            default["description"] = "DeepSeek 不支持视觉分析，已跳过"
-            return default
-
-        if not screenshot_b64 or not GEMINI_AVAILABLE or not _gemini_key():
-            return default
-
-        try:
-            client = _get_gemini()
-            image_bytes = base64.b64decode(screenshot_b64)
-            image_part = gemini_types.Part.from_bytes(data=image_bytes, mime_type="image/png")
-
-            resp = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=[cls.VISION_PROMPT, image_part],
-                config=gemini_types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=4096,
-                ),
-            )
-            raw = resp.text.strip()
-            result = _parse_json(raw)
-            result["visual_risk_score"] = max(0.0, min(1.0, float(result.get("visual_risk_score", 0.0))))
-            logger.info(f"[AI] 视觉分析完成: risk={result['visual_risk_score']:.2f}")
-            return result
-        except Exception as e:
-            logger.error(f"[AI] 视觉分析失败: {e}")
-            return default
-
-
-# ── AI 侦查报告生成（双引擎）─────────────────────────────────
-class GeminiReportGenerator:
-    """AI 侦查报告（双引擎）"""
+# ── AI 侦查报告生成 ─────────────────────────────────────────
+class AIReportGenerator:
+    """AI 侦查报告"""
 
     REPORT_PROMPT = """你是一名资深网络犯罪侦查分析师，拥有10年以上网络诈骗案件侦办经验。根据以下情报数据，撰写一份详尽专业的涉诈网站侦查分析报告。
 
@@ -259,7 +161,6 @@ class GeminiReportGenerator:
 ## 五、内容与舆情综合分析
 分析页面话术、视觉欺骗和社会舆情：
 - 欺诈话术特征（具体诱导性词汇和句式分析）
-- 视觉仿冒与心理操控手法
 - 受害人投诉情况分析（投诉量、投诉内容模式）
 - 搜索引擎舆情分析
 - AI内容检测结果解读

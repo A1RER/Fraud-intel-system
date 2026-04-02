@@ -13,7 +13,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Streamlit Cloud Secrets → 环境变量（云端部署必需）
-for _secret_key in ["GEMINI_API_KEY", "DEEPSEEK_API_KEY"]:
+for _secret_key in ["DEEPSEEK_API_KEY"]:
     try:
         os.environ[_secret_key] = st.secrets[_secret_key]
     except (KeyError, FileNotFoundError, Exception):
@@ -64,11 +64,11 @@ if _pending_ai and st.session_state.get("_report_id"):
         try:
             _pipeline = AnalysisPipeline()
             _loop = asyncio.new_event_loop()
-            _gemini = _loop.run_until_complete(
+            _ai = _loop.run_until_complete(
                 _pipeline.run_ai(st.session_state["_report_id"], _pending_ai)
             )
             _loop.close()
-            st.session_state["gemini_result"] = _gemini
+            st.session_state["ai_result"] = _ai
         except Exception as e:
             st.error(f"AI 分析失败：{e}")
 
@@ -82,13 +82,12 @@ with st.sidebar:
     st.markdown("---")
     # ── AI 引擎状态 ──
     st.markdown("### 🤖 AI 引擎状态")
-    _gk = os.getenv("GEMINI_API_KEY", "")
     _dk = os.getenv("DEEPSEEK_API_KEY", "")
-    if _gk or _dk:
-        st.success(f"✦ Gemini {'✓' if _gk else '✗'} / DeepSeek {'✓' if _dk else '✗'}")
+    if _dk:
+        st.success("✦ DeepSeek ✓")
         st.caption("💡 基础分析不消耗 AI 额度，分析完成后可按需调用")
     else:
-        st.warning("✦ AI 未连接 — 请配置至少一个 API Key")
+        st.warning("✦ AI 未连接 — 请配置 DEEPSEEK_API_KEY")
     st.markdown("---")
     st.markdown("### 📋 风险等级说明")
     st.markdown("🔴 **RED ≥ 80** — 高危，立即处置\n\n🟠 **ORANGE 60~79** — 中高风险，重点监控\n\n🟡 **YELLOW 40~59** — 疑似风险，继续侦查\n\n🟢 **GREEN < 40** — 暂无风险，存档备查")
@@ -136,7 +135,7 @@ if analyze_btn and url_input.strip():
     # 存入 session_state
     st.session_state["analysis_result"] = result
     st.session_state["_report_id"] = result.report_id if result.success else None
-    st.session_state.pop("gemini_result", None)  # 清除旧 AI 结果
+    st.session_state.pop("ai_result", None)  # 清除旧 AI 结果
 elif analyze_btn:
     st.warning("⚠️ 请输入目标网址")
 
@@ -175,7 +174,7 @@ if _stored and _stored.success and _stored.report:
     }
 
     # 优先使用按需 AI 结果，否则使用 pipeline 内置结果
-    gemini = st.session_state.get("gemini_result") or getattr(report, "gemini", None)
+    ai_data = st.session_state.get("ai_result") or getattr(report, "ai_analysis", None)
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 风险热力图", "🔍 原始情报", "⚖️ 处置预案", "🤖 AI 智能分析", "📄 完整报告"])
 
     with tab1:
@@ -234,94 +233,65 @@ if _stored and _stored.success and _stored.report:
                 st.markdown(f"- **{XAI.get(fn, fn)}** （贡献 {contrib:.2f} 分）")
 
     with tab4:
-        if gemini:
+        if ai_data:
             # ── AI 来源标识 ──
-            _provider_label = gemini.model_name or "AI Engine"
+            _provider_label = ai_data.model_name or "AI Engine"
             _provider_color = "#81c784"
             st.markdown(f"""<div style="background:#0a1628;border:1px solid #1b5e20;border-radius:6px;padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between">
               <div style="display:flex;align-items:center;gap:8px">
                 <span style="font-size:18px">✦</span>
                 <span style="color:{_provider_color};font-weight:600;font-size:13px">Powered by {_provider_label}</span>
               </div>
-              <span style="color:#546e7a;font-size:11px;font-family:'Share Tech Mono',monospace">AI 分析耗时 {gemini.ai_elapsed_s:.1f}s</span>
+              <span style="color:#546e7a;font-size:11px;font-family:'Share Tech Mono',monospace">AI 分析耗时 {ai_data.ai_elapsed_s:.1f}s</span>
             </div>""", unsafe_allow_html=True)
             # ── AI 内容语义分析 ──
             st.markdown("### 🧠 AI 内容语义分析")
-            ai_score = gemini.content_risk_score
-            if ai_score > 0 or (gemini.content_reasoning and "未采集" not in gemini.content_reasoning):
+            ai_score = ai_data.content_risk_score
+            if ai_score > 0 or (ai_data.content_reasoning and "未采集" not in ai_data.content_reasoning):
                 ai_color = "#f44336" if ai_score>0.7 else ("#ff9800" if ai_score>0.4 else ("#ffeb3b" if ai_score>0.2 else "#4caf50"))
                 st.markdown(f"""<div style="background:#0d1b2a;border:1px solid #1e3a5f;border-radius:8px;padding:16px;margin:8px 0">
                   <div style="display:flex;align-items:center;gap:16px">
                     <div style="font-size:36px;font-weight:700;color:{ai_color};font-family:'Share Tech Mono',monospace">{ai_score:.0%}</div>
                     <div><div style="font-size:13px;color:#546e7a">AI 欺诈风险评分</div>
-                    <div style="color:#b0bec5;font-size:13px;margin-top:4px">{gemini.content_reasoning}</div></div>
+                    <div style="color:#b0bec5;font-size:13px;margin-top:4px">{ai_data.content_reasoning}</div></div>
                   </div></div>""", unsafe_allow_html=True)
             else:
-                st.info(f"ℹ️ {gemini.content_reasoning}")
+                st.info(f"ℹ️ {ai_data.content_reasoning}")
 
-            if gemini.fraud_types:
+            if ai_data.fraud_types:
                 st.markdown("**检测到的欺诈类型：**")
-                st.markdown(" ".join(f'<span class="kw-tag-high">{ft}</span>' for ft in gemini.fraud_types), unsafe_allow_html=True)
+                st.markdown(" ".join(f'<span class="kw-tag-high">{ft}</span>' for ft in ai_data.fraud_types), unsafe_allow_html=True)
 
-            if gemini.key_evidence:
+            if ai_data.key_evidence:
                 st.markdown("**关键证据：**")
-                for ev in gemini.key_evidence:
+                for ev in ai_data.key_evidence:
                     st.markdown(f"- {ev}")
 
-            if gemini.risk_indicators:
+            if ai_data.risk_indicators:
                 st.markdown("**风险指标：**")
-                for ri in gemini.risk_indicators:
+                for ri in ai_data.risk_indicators:
                     st.markdown(f"- {ri}")
 
-            # ── AI 视觉分析 ──
-            if gemini.visual_risk_score > 0 or gemini.visual_features:
-                st.markdown("---\n### 👁️ AI 视觉分析")
-                vis_color = "#f44336" if gemini.visual_risk_score>0.7 else ("#ff9800" if gemini.visual_risk_score>0.4 else "#4caf50")
-                phishing_tag = '  <span style="color:#f44336;font-weight:700">⚠️ 钓鱼网站</span>' if gemini.is_phishing else ""
-                impersonate_tag = f'  仿冒目标：<span style="color:#ff9800;font-weight:700">{gemini.impersonates}</span>' if gemini.impersonates else ""
-                st.markdown(f"""<div style="background:#0d1b2a;border:1px solid #1e3a5f;border-radius:8px;padding:16px;margin:8px 0">
-                  <div style="font-size:24px;font-weight:700;color:{vis_color};font-family:'Share Tech Mono',monospace">{gemini.visual_risk_score:.0%}</div>
-                  <div style="font-size:13px;color:#546e7a">AI 视觉风险评分{phishing_tag}{impersonate_tag}</div>
-                  <div style="color:#b0bec5;font-size:13px;margin-top:8px">{gemini.visual_description}</div>
-                </div>""", unsafe_allow_html=True)
-                if gemini.visual_features:
-                    st.markdown("**可疑视觉特征：**")
-                    for vf in gemini.visual_features:
-                        st.markdown(f"- {vf}")
-
             # ── AI 侦查报告 ──
-            if gemini.ai_report:
+            if ai_data.ai_report:
                 st.markdown("---\n### 📝 AI 侦查报告")
-                st.markdown(gemini.ai_report)
+                st.markdown(ai_data.ai_report)
         else:
             # ── 按需 AI 分析入口 ──
             st.markdown("""<div style="background:#0a1628;border:1px solid #1e3a5f;border-radius:8px;padding:20px;margin:8px 0;text-align:center">
               <div style="font-size:16px;color:#4fc3f7;margin-bottom:8px">💡 基础分析已完成，AI 深度分析按需调用</div>
-              <div style="font-size:12px;color:#546e7a">选择引擎后将执行内容语义分析、视觉分析和侦查报告生成</div>
+              <div style="font-size:12px;color:#546e7a">选择引擎后将执行内容语义分析和侦查报告生成</div>
             </div>""", unsafe_allow_html=True)
-            col_g, col_d = st.columns(2)
-            with col_g:
-                _gk = os.getenv("GEMINI_API_KEY", "")
-                if st.button("✦ Gemini 深度分析", use_container_width=True, disabled=not _gk):
-                    st.session_state["_pending_ai"] = "gemini"
-                    st.rerun()
-                if not _gk:
-                    st.caption("⚠️ 未配置 GEMINI_API_KEY")
-                else:
-                    st.caption("支持内容 + 视觉分析")
-            with col_d:
-                _dk = os.getenv("DEEPSEEK_API_KEY", "")
-                if st.button("✦ DeepSeek 深度分析", use_container_width=True, disabled=not _dk):
-                    st.session_state["_pending_ai"] = "deepseek"
-                    st.rerun()
-                if not _dk:
-                    st.caption("⚠️ 未配置 DEEPSEEK_API_KEY")
-                else:
-                    st.caption("仅支持内容分析（无视觉）")
+            _dk = os.getenv("DEEPSEEK_API_KEY", "")
+            if st.button("✦ DeepSeek 深度分析", use_container_width=True, disabled=not _dk):
+                st.session_state["_pending_ai"] = "deepseek"
+                st.rerun()
+            if not _dk:
+                st.caption("⚠️ 未配置 DEEPSEEK_API_KEY")
 
     with tab5:
         report_dict = {"report_id":report.report_id,"analyzed_at":report.analyzed_at.isoformat(),"url":report.url,"wras_score":wras.final_score,"risk_level":wras.risk_level.value,"disposal_action":report.disposal.action,"feature_vector":{k:v for k,v in feat.model_dump().items() if isinstance(v,(int,float))},"feature_contributions":wras.feature_contrib,"score_breakdown":wras.score_breakdown}
-        if gemini:
-            report_dict["gemini_analysis"] = {"content_risk_score":gemini.content_risk_score,"fraud_types":gemini.fraud_types,"visual_risk_score":gemini.visual_risk_score,"is_phishing":gemini.is_phishing}
+        if ai_data:
+            report_dict["ai_analysis"] = {"content_risk_score":ai_data.content_risk_score,"fraud_types":ai_data.fraud_types}
         st.json(report_dict)
         st.download_button(label="⬇ 下载 JSON 报告", data=json.dumps(report_dict, ensure_ascii=False, indent=2), file_name=f"{report.report_id}.json", mime="application/json")

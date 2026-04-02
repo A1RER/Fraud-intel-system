@@ -8,5 +8,4 @@ loguru
 redis
 Pillow
 imagehash
-google-genai
 openai

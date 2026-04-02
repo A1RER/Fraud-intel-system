@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type {
   InputType, FraudAnalysisResponse, FraudRiskResult,
-  GeminiAnalysis, IntelReport, FeatureVector,
+  AIAnalysis, IntelReport, FeatureVector,
 } from '../types'
 import { RISK_CONFIG, WRAS_LEVEL_CONFIG, INPUT_TABS } from '../constants'
 import { IntelRow, FeatureBar } from '../components/common'
@@ -16,7 +16,7 @@ export default function AnalyzePage() {
   const [error, setError]             = useState<string | null>(null)
 
   const [aiLoading, setAiLoading] = useState<string | null>(null)
-  const [gemini, setGemini]       = useState<GeminiAnalysis | null>(null)
+  const [aiResult, setAiResult]     = useState<AIAnalysis | null>(null)
 
   function getMainContent(): string {
     if (inputType === 'company') return companyName.trim()
@@ -31,7 +31,7 @@ export default function AnalyzePage() {
     setLoading(true)
     setError(null)
     setResult(null)
-    setGemini(null)
+    setAiResult(null)
 
     try {
       const body: Record<string, unknown> = { input_type: inputType, content: main }
@@ -69,7 +69,7 @@ export default function AnalyzePage() {
       }
       const submitData = await submitRes.json()
       if (!submitData.task_id) {
-        if (submitData.success && submitData.gemini) setGemini(submitData.gemini)
+        if (submitData.success && submitData.ai_analysis) setAiResult(submitData.ai_analysis)
         else setError(submitData.error ?? 'AI 分析失败')
         return
       }
@@ -80,7 +80,7 @@ export default function AnalyzePage() {
         if (!pollRes.ok) continue
         const pollData = await pollRes.json()
         if (pollData.status === 'done') {
-          if (pollData.success && pollData.gemini) setGemini(pollData.gemini)
+          if (pollData.success && pollData.ai_analysis) setAiResult(pollData.ai_analysis)
           else setError(pollData.error ?? 'AI 分析失败')
           return
         }
@@ -156,7 +156,7 @@ export default function AnalyzePage() {
       {error && <div className="bg-red-950/50 border border-red-800 rounded-lg p-4 text-red-400 text-sm">⚠️ {error}</div>}
       {result && !result.success && <div className="bg-red-950/50 border border-red-800 rounded-lg p-4 text-red-400 text-sm">⚠️ 分析失败：{result.error}</div>}
       {result?.success && result.risk && <FraudResultView risk={result.risk} reportId={result.report_id} elapsed={result.elapsed_s} />}
-      {result?.success && result.wras_report && <WRASDetailView report={result.wras_report} gemini={gemini} aiLoading={aiLoading} onAIAnalyze={handleAIAnalyze} />}
+      {result?.success && result.wras_report && <WRASDetailView report={result.wras_report} aiResult={aiResult} aiLoading={aiLoading} onAIAnalyze={handleAIAnalyze} />}
     </main>
   )
 }
@@ -232,8 +232,8 @@ function FraudResultView({ risk, reportId, elapsed }: { risk: FraudRiskResult; r
 
 
 // ── WRAS 详细报告 ──────────────────────────────────────────────────
-function WRASDetailView({ report, gemini, aiLoading, onAIAnalyze }: {
-  report: IntelReport; gemini: GeminiAnalysis | null; aiLoading: string | null; onAIAnalyze: (engine: string) => void
+function WRASDetailView({ report, aiResult, aiLoading, onAIAnalyze }: {
+  report: IntelReport; aiResult: AIAnalysis | null; aiLoading: string | null; onAIAnalyze: (engine: string) => void
 }) {
   const { wras, disposal, raw_intel, features } = report
   const level = WRAS_LEVEL_CONFIG[wras.risk_level]
@@ -300,11 +300,10 @@ function WRASDetailView({ report, gemini, aiLoading, onAIAnalyze }: {
 
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
         <h2 className="text-slate-500 text-xs font-mono tracking-wider mb-4">AI 深度分析（按需调用）</h2>
-        {!gemini && !aiLoading && (
+        {!aiResult && !aiLoading && (
           <div className="space-y-3">
             <p className="text-slate-500 text-sm">基础分析已完成。如需 AI 深度语义分析，请选择引擎：</p>
             <div className="flex gap-3">
-              <button onClick={() => onAIAnalyze('gemini')} className="bg-emerald-900/50 hover:bg-emerald-800/50 border border-emerald-700 text-emerald-300 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer">✦ Gemini 分析</button>
               <button onClick={() => onAIAnalyze('deepseek')} className="bg-blue-900/50 hover:bg-blue-800/50 border border-blue-700 text-blue-300 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer">✦ DeepSeek 分析</button>
             </div>
           </div>
@@ -312,71 +311,55 @@ function WRASDetailView({ report, gemini, aiLoading, onAIAnalyze }: {
         {aiLoading && (
           <div className="text-center py-8 text-slate-500">
             <div className="text-3xl mb-3 animate-pulse">✦</div>
-            <p className="text-sm">正在执行 {aiLoading === 'gemini' ? 'Gemini' : 'DeepSeek'} AI 深度分析...</p>
+            <p className="text-sm">正在执行 DeepSeek AI 深度分析...</p>
           </div>
         )}
-        {gemini && <GeminiResultView gemini={gemini} />}
+        {aiResult && <AIResultView aiResult={aiResult} />}
       </div>
     </div>
   )
 }
 
 
-// ── Gemini 结果 ──────────────────────────────────────────────────
-function GeminiResultView({ gemini }: { gemini: GeminiAnalysis }) {
+// ── AI 结果 ──────────────────────────────────────────────────
+function AIResultView({ aiResult }: { aiResult: AIAnalysis }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between bg-slate-950 rounded-lg px-4 py-2 border border-green-900/50">
         <div className="flex items-center gap-2">
           <span className="text-lg">✦</span>
-          <span className="text-green-400 font-medium text-sm">Powered by {gemini.model_name || 'AI Engine'}</span>
+          <span className="text-green-400 font-medium text-sm">Powered by {aiResult.model_name || 'AI Engine'}</span>
         </div>
-        <span className="text-slate-600 text-xs font-mono">耗时 {gemini.ai_elapsed_s.toFixed(1)}s</span>
+        <span className="text-slate-600 text-xs font-mono">耗时 {aiResult.ai_elapsed_s.toFixed(1)}s</span>
       </div>
 
-      {(gemini.content_risk_score > 0 || gemini.content_reasoning) && (
+      {(aiResult.content_risk_score > 0 || aiResult.content_reasoning) && (
         <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
           <h3 className="text-slate-400 text-xs font-mono mb-3">AI 内容语义分析</h3>
           <div className="flex items-center gap-4">
-            <span className={`text-3xl font-bold font-mono ${gemini.content_risk_score > 0.7 ? 'text-red-400' : gemini.content_risk_score > 0.4 ? 'text-orange-400' : gemini.content_risk_score > 0.2 ? 'text-yellow-400' : 'text-green-400'}`}>
-              {(gemini.content_risk_score * 100).toFixed(0)}%
+            <span className={`text-3xl font-bold font-mono ${aiResult.content_risk_score > 0.7 ? 'text-red-400' : aiResult.content_risk_score > 0.4 ? 'text-orange-400' : aiResult.content_risk_score > 0.2 ? 'text-yellow-400' : 'text-green-400'}`}>
+              {(aiResult.content_risk_score * 100).toFixed(0)}%
             </span>
-            <p className="text-slate-400 text-sm">{gemini.content_reasoning}</p>
+            <p className="text-slate-400 text-sm">{aiResult.content_reasoning}</p>
           </div>
-          {gemini.fraud_types.length > 0 && (
+          {aiResult.fraud_types.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
-              {gemini.fraud_types.map((ft, i) => <span key={i} className="bg-red-950 text-red-300 border border-red-800 px-2 py-0.5 rounded-full text-xs">{ft}</span>)}
+              {aiResult.fraud_types.map((ft: string, i: number) => <span key={i} className="bg-red-950 text-red-300 border border-red-800 px-2 py-0.5 rounded-full text-xs">{ft}</span>)}
             </div>
           )}
-          {gemini.key_evidence.length > 0 && (
+          {aiResult.key_evidence.length > 0 && (
             <div className="mt-3 space-y-1">
               <p className="text-slate-500 text-xs font-mono">关键证据：</p>
-              {gemini.key_evidence.map((ev, i) => <p key={i} className="text-slate-400 text-xs leading-relaxed">• {ev}</p>)}
+              {aiResult.key_evidence.map((ev: string, i: number) => <p key={i} className="text-slate-400 text-xs leading-relaxed">• {ev}</p>)}
             </div>
           )}
         </div>
       )}
 
-      {(gemini.visual_risk_score > 0 || gemini.visual_features.length > 0) && (
-        <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-          <h3 className="text-slate-400 text-xs font-mono mb-3">AI 视觉分析</h3>
-          <div className="flex items-center gap-4">
-            <span className={`text-3xl font-bold font-mono ${gemini.visual_risk_score > 0.7 ? 'text-red-400' : gemini.visual_risk_score > 0.4 ? 'text-orange-400' : 'text-green-400'}`}>
-              {(gemini.visual_risk_score * 100).toFixed(0)}%
-            </span>
-            <div>
-              <p className="text-slate-400 text-sm">{gemini.visual_description}</p>
-              {gemini.is_phishing && <span className="text-red-400 font-bold text-xs">⚠️ 钓鱼网站</span>}
-              {gemini.impersonates && <span className="text-orange-400 text-xs ml-2">仿冒: {gemini.impersonates}</span>}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {gemini.ai_report && (
+      {aiResult.ai_report && (
         <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
           <h3 className="text-slate-400 text-xs font-mono mb-3">AI 侦查报告</h3>
-          <div className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{gemini.ai_report}</div>
+          <div className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{aiResult.ai_report}</div>
         </div>
       )}
     </div>

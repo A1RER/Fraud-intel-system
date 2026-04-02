@@ -12,15 +12,13 @@ from collections import OrderedDict
 from loguru import logger
 
 from backend.models.schemas import (
-    AnalysisRequest, AnalysisResponse, IntelReport, DisposalPlan, GeminiAnalysis
+    AnalysisRequest, AnalysisResponse, IntelReport, DisposalPlan, AIAnalysis
 )
 from backend.modules.osint_collector import OSINTCollector
 from backend.modules.feature_engineer import FeatureEngineer
 from backend.modules.wras_engine import WRASEngine
-from backend.modules.gemini_analyzer import (
-    GeminiContentAnalyzer, GeminiVisionAnalyzer, GeminiReportGenerator
-)
-from config.settings import DISPOSAL_PLANS, GEMINI_MODEL
+from backend.modules.ai_analyzer import AIContentAnalyzer, AIReportGenerator
+from config.settings import DISPOSAL_PLANS, DEEPSEEK_MODEL
 
 
 class AnalysisPipeline:
@@ -41,13 +39,12 @@ class AnalysisPipeline:
         AnalysisPipeline._ai_cache[report_id] = {
             "page_text": raw_intel.page_text or "",
             "page_title": raw_intel.page_title or "",
-            "screenshot_b64": raw_intel.screenshot_b64 or "",
             "report_context": report_context,
         }
         while len(AnalysisPipeline._ai_cache) > self._CACHE_MAX:
             AnalysisPipeline._ai_cache.popitem(last=False)
 
-    async def run_ai(self, report_id: str, ai_engine: str) -> GeminiAnalysis:
+    async def run_ai(self, report_id: str, ai_engine: str) -> AIAnalysis:
         """按需运行 AI 分析（复用已缓存的 OSINT 数据，不重复采集）"""
         cached = AnalysisPipeline._ai_cache.get(report_id)
         if not cached:
@@ -55,33 +52,24 @@ class AnalysisPipeline:
 
         page_text = cached["page_text"]
         page_title = cached["page_title"]
-        screenshot_b64 = cached["screenshot_b64"]
         report_context = dict(cached["report_context"])
 
         ai_start = time.time()
 
         content_result = {}
         try:
-            content_result = GeminiContentAnalyzer.analyze(
+            content_result = AIContentAnalyzer.analyze(
                 page_text, page_title, engine=ai_engine,
             )
         except Exception as e:
             logger.warning(f"[AI] 内容分析失败: {e}")
-
-        vision_result = {}
-        try:
-            vision_result = GeminiVisionAnalyzer.analyze(
-                screenshot_b64, engine=ai_engine,
-            )
-        except Exception as e:
-            logger.warning(f"[AI] 视觉分析失败: {e}")
 
         report_context["ai_content_score"] = content_result.get("risk_score", 0)
         report_context["ai_fraud_types"] = content_result.get("fraud_types", [])
         report_context["ai_evidence"] = content_result.get("key_evidence", [])
 
         try:
-            ai_report_text, report_provider = GeminiReportGenerator.generate(
+            ai_report_text, report_provider = AIReportGenerator.generate(
                 report_context, engine=ai_engine,
             )
         except Exception as e:
@@ -92,7 +80,7 @@ class AnalysisPipeline:
         actual_provider = report_provider or content_provider or ""
 
         logger.success(f"[PIPELINE] 按需 AI 分析完成 [{actual_provider}]")
-        return GeminiAnalysis(
+        return AIAnalysis(
             model_name=actual_provider,
             ai_elapsed_s=round(time.time() - ai_start, 2),
             content_risk_score=content_result.get("risk_score", 0.0),
@@ -100,11 +88,6 @@ class AnalysisPipeline:
             key_evidence=content_result.get("key_evidence", []),
             risk_indicators=content_result.get("risk_indicators", []),
             content_reasoning=content_result.get("reasoning", ""),
-            visual_risk_score=vision_result.get("visual_risk_score", 0.0),
-            is_phishing=vision_result.get("is_phishing", False),
-            impersonates=vision_result.get("impersonates"),
-            visual_features=vision_result.get("visual_features", []),
-            visual_description=vision_result.get("description", ""),
             ai_report=ai_report_text,
         )
 
@@ -115,30 +98,22 @@ class AnalysisPipeline:
         logger.info(f"[PIPELINE] 开始分析 | report_id={report_id} | url={request.url}")
         
         try:
-            # 运行时读取 API Key（避免模块缓存导致空值）
-            gemini_api_key = os.getenv("GEMINI_API_KEY", "")
             deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "")
-            ai_engine = request.ai_engine  # auto / gemini / deepseek
+            ai_engine = request.ai_engine  # auto / deepseek
 
             # 阶段一：OSINT 采集
             logger.info("[PIPELINE] 阶段1/5: OSINT 情报采集")
             raw_intel = await OSINTCollector.collect(request.url)
 
-            # 阶段二：AI 内容 + 视觉分析（结果融入特征工程）
-            content_result, vision_result = {}, {}
-            engine_available = (
-                (ai_engine in ("auto", "gemini") and gemini_api_key) or
-                (ai_engine in ("auto", "deepseek") and deepseek_api_key)
-            )
+            # 阶段二：AI 内容分析（结果融入特征工程）
+            content_result = {}
+            engine_available = ai_engine in ("auto", "deepseek") and deepseek_api_key
             if engine_available:
-                logger.info(f"[PIPELINE] 阶段2/5: AI 内容与视觉分析 (engine={ai_engine})")
+                logger.info(f"[PIPELINE] 阶段2/5: AI 内容分析 (engine={ai_engine})")
                 try:
-                    content_result = GeminiContentAnalyzer.analyze(
+                    content_result = AIContentAnalyzer.analyze(
                         raw_intel.page_text or "", raw_intel.page_title or "",
                         engine=ai_engine,
-                    )
-                    vision_result = GeminiVisionAnalyzer.analyze(
-                        raw_intel.screenshot_b64 or "", engine=ai_engine,
                     )
                 except Exception as e:
                     logger.warning(f"[PIPELINE] AI 分析失败（降级为纯规则）: {e}")
@@ -147,7 +122,7 @@ class AnalysisPipeline:
             logger.info("[PIPELINE] 阶段3/5: 特征提取与信号增强")
             features = FeatureEngineer.extract(
                 raw_intel, request.extra_keywords,
-                gemini_content=content_result, gemini_vision=vision_result,
+                ai_content=content_result,
             )
 
             # 阶段四：WRAS 评分
@@ -199,16 +174,16 @@ class AnalysisPipeline:
             # 缓存供后续按需 AI 分析
             self._cache_for_ai(report_id, raw_intel, report_context)
 
-            gemini_result = None
+            ai_result = None
             ai_start = time.time()
             if engine_available:
                 try:
-                    ai_report_text, report_provider = GeminiReportGenerator.generate(report_context, engine=ai_engine)
+                    ai_report_text, report_provider = AIReportGenerator.generate(report_context, engine=ai_engine)
 
                     content_provider = content_result.get("_provider", "")
-                    actual_provider = report_provider or content_provider or GEMINI_MODEL
+                    actual_provider = report_provider or content_provider or DEEPSEEK_MODEL
 
-                    gemini_result = GeminiAnalysis(
+                    ai_result = AIAnalysis(
                         model_name=actual_provider,
                         ai_elapsed_s=round(time.time() - ai_start, 2),
                         content_risk_score=content_result.get("risk_score", 0.0),
@@ -216,11 +191,6 @@ class AnalysisPipeline:
                         key_evidence=content_result.get("key_evidence", []),
                         risk_indicators=content_result.get("risk_indicators", []),
                         content_reasoning=content_result.get("reasoning", ""),
-                        visual_risk_score=vision_result.get("visual_risk_score", 0.0),
-                        is_phishing=vision_result.get("is_phishing", False),
-                        impersonates=vision_result.get("impersonates"),
-                        visual_features=vision_result.get("visual_features", []),
-                        visual_description=vision_result.get("description", ""),
                         ai_report=ai_report_text,
                     )
                     logger.success(f"[PIPELINE] AI 报告生成完成 [{actual_provider}]")
@@ -235,7 +205,7 @@ class AnalysisPipeline:
                 features=features,
                 wras=wras_result,
                 disposal=disposal,
-                gemini=gemini_result,
+                ai_analysis=ai_result,
             )
             
             elapsed = round(time.time() - start_time, 2)

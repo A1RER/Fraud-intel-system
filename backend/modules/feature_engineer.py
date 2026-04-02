@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 from loguru import logger
 
 from backend.models.schemas import RawIntelligence, FeatureVector
-from config.settings import RISK_KEYWORDS, KEYWORD_WEIGHTS, OFFICIAL_PAGE_HASHES, GEMINI_API_KEY
+from config.settings import RISK_KEYWORDS, KEYWORD_WEIGHTS, OFFICIAL_PAGE_HASHES
 
 try:
     from PIL import Image
@@ -159,7 +159,7 @@ def feat_blacklist(hit: bool) -> float:
 class FeatureEngineer:
     @staticmethod
     def extract(intel: RawIntelligence, extra_keywords: List[str] = [],
-                gemini_content: Dict = None, gemini_vision: Dict = None) -> FeatureVector:
+                ai_content: Dict = None) -> FeatureVector:
         logger.info(f"[FE] 开始特征提取: {intel.domain}")
         combined_text = " ".join(filter(None, [
             intel.page_text or "", intel.page_title or "",
@@ -171,20 +171,14 @@ class FeatureEngineer:
             intel.search_snippets + intel.social_mentions
         )
 
-        # ── Gemini AI 特征融合 ────────────────────────────────────
+        # ── AI 特征融合 ──────────────────────────────────────────
         # 策略：取规则引擎和 AI 结果的较大值（宁可误报，不可漏报）
-        if gemini_content and gemini_content.get("risk_score", 0) > 0:
-            ai_content_score = gemini_content["risk_score"]
+        if ai_content and ai_content.get("risk_score", 0) > 0:
+            ai_content_score = ai_content["risk_score"]
             kw_score = max(kw_score, ai_content_score)
-            # 将 AI 检测到的欺诈类型追加到关键词命中
-            for ft in gemini_content.get("fraud_types", []):
+            for ft in ai_content.get("fraud_types", []):
                 kw_hits.setdefault("high", []).append(f"[AI]{ft}")
-            logger.info(f"[FE] Gemini 内容融合: AI={ai_content_score:.2f}, final kw_score={kw_score:.2f}")
-
-        if gemini_vision and gemini_vision.get("visual_risk_score", 0) > 0:
-            ai_visual_score = gemini_vision["visual_risk_score"]
-            visual_sim = max(visual_sim, ai_visual_score)
-            logger.info(f"[FE] Gemini 视觉融合: AI={ai_visual_score:.2f}, final visual={visual_sim:.2f}")
+            logger.info(f"[FE] AI 内容融合: AI={ai_content_score:.2f}, final kw_score={kw_score:.2f}")
 
         fv = FeatureVector(
             domain_age_days=feat_domain_age(intel.domain_age_days),

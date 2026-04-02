@@ -106,8 +106,8 @@ async def ai_analyze(request: AIAnalyzeRequest, background_tasks: BackgroundTask
     if not redis_client:
         # 无 Redis：同步执行（仅本地开发用）
         try:
-            gemini_result = await pipeline.run_ai(request.report_id, request.ai_engine)
-            return {"success": True, "gemini": gemini_result.model_dump()}
+            ai_result = await pipeline.run_ai(request.report_id, request.ai_engine)
+            return {"success": True, "ai_analysis": ai_result.model_dump()}
         except Exception as e:
             logger.error(f"[AI] 按需分析失败: {e}")
             return {"success": False, "error": str(e)}
@@ -117,9 +117,9 @@ async def ai_analyze(request: AIAnalyzeRequest, background_tasks: BackgroundTask
 
     async def _run():
         try:
-            gemini_result = await pipeline.run_ai(request.report_id, request.ai_engine)
+            ai_result = await pipeline.run_ai(request.report_id, request.ai_engine)
             payload = json.dumps({"status": "done", "success": True,
-                                  "gemini": gemini_result.model_dump()})
+                                  "ai_analysis": ai_result.model_dump()})
         except Exception as e:
             logger.error(f"[AI] 后台任务失败: {e}")
             payload = json.dumps({"status": "done", "success": False, "error": str(e)})

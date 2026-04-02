@@ -54,7 +54,7 @@ export interface FeatureVector {
   sentiment_detail?: string
 }
 
-export interface GeminiAnalysis {
+export interface AIAnalysis {
   model_name: string
   ai_elapsed_s: number
   content_risk_score: number
@@ -62,11 +62,6 @@ export interface GeminiAnalysis {
   key_evidence: string[]
   risk_indicators: string[]
   content_reasoning: string
-  visual_risk_score: number
-  is_phishing: boolean
-  impersonates?: string
-  visual_features: string[]
-  visual_description: string
   ai_report: string
 }
 
@@ -78,7 +73,7 @@ export interface IntelReport {
   disposal: DisposalPlan
   raw_intel: RawIntelligence
   features: FeatureVector
-  gemini?: GeminiAnalysis
+  ai_analysis?: AIAnalysis
 }
 
 export interface AnalysisResponse {
@@ -92,7 +87,7 @@ export interface AnalysisResponse {
 export interface AIAnalyzeResponse {
   success: boolean
   error?: string
-  gemini?: GeminiAnalysis
+  ai_analysis?: AIAnalysis
 }
 
 // ─── 慧眼：招聘诈骗识别 ─────────────────────────────────────────

@@ -171,7 +171,7 @@ class RecruitmentAnalyzer:
     @classmethod
     def ai_analyze(cls, text: str, engine: str = "auto") -> dict:
         """
-        AI 语义分析（调用 Gemini / DeepSeek）
+        AI 语义分析（调用 DeepSeek）
 
         返回:
             risk_score:      0-1
@@ -180,7 +180,7 @@ class RecruitmentAnalyzer:
             risk_indicators: [str]
             reasoning:       str
         """
-        from backend.modules.gemini_analyzer import _call_llm, _parse_json
+        from backend.modules.ai_analyzer import _call_llm, _parse_json
 
         if not text or len(text.strip()) < 10:
             return {

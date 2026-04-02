@@ -99,7 +99,7 @@ class CompanyChecker:
             reasoning:       str
             suggestions:     [str]
         """
-        from backend.modules.gemini_analyzer import _call_llm, _parse_json
+        from backend.modules.ai_analyzer import _call_llm, _parse_json
 
         prompt = f"""你是一名反诈专家。请分析以下企业在招聘场景中的可疑程度。
 

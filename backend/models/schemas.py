@@ -109,24 +109,15 @@ class DisposalPlan(BaseModel):
     steps:   List[str]
 
 
-class GeminiAnalysis(BaseModel):
-    """Gemini AI 分析结果"""
-    # 元信息（用于验证来源）
+class AIAnalysis(BaseModel):
+    """AI 分析结果（DeepSeek 引擎）"""
     model_name:          str = ""
     ai_elapsed_s:        float = 0.0
-    # 内容语义分析
     content_risk_score:  float = 0.0
     fraud_types:         List[str] = []
     key_evidence:        List[str] = []
     risk_indicators:     List[str] = []
     content_reasoning:   str = ""
-    # 视觉分析
-    visual_risk_score:   float = 0.0
-    is_phishing:         bool = False
-    impersonates:        Optional[str] = None
-    visual_features:     List[str] = []
-    visual_description:  str = ""
-    # AI 侦查报告
     ai_report:           str = ""
 
 
@@ -139,7 +130,7 @@ class IntelReport(BaseModel):
     features:        FeatureVector
     wras:            WRASResult
     disposal:        DisposalPlan
-    gemini:          Optional[GeminiAnalysis] = None
+    ai_analysis:     Optional[AIAnalysis] = None
     analyst_notes:   str = ""
     evidence_urls:   List[str] = []
 
@@ -150,7 +141,7 @@ class AnalysisRequest(BaseModel):
     priority:       str = "normal"    # normal / urgent
     analyst_id:     Optional[str] = None
     extra_keywords: List[str] = []    # 案情补充关键词
-    ai_engine:      str = "none"      # none / auto / gemini / deepseek
+    ai_engine:      str = "none"      # none / auto / deepseek
 
     @field_validator("url")
     @classmethod
@@ -166,7 +157,7 @@ class AnalysisRequest(BaseModel):
 class AIAnalyzeRequest(BaseModel):
     """按需 AI 分析请求"""
     report_id: str
-    ai_engine: str = "auto"   # gemini / deepseek / auto
+    ai_engine: str = "auto"   # deepseek / auto
 
 
 class AnalysisResponse(BaseModel):
@@ -194,7 +185,7 @@ class FraudAnalysisRequest(BaseModel):
     company_name:   Optional[str] = None         # 补充：公司名称
     url:            Optional[str] = None         # 补充：相关链接
     extra_keywords: List[str]     = []
-    ai_engine:      str           = "auto"       # none / auto / gemini / deepseek
+    ai_engine:      str           = "auto"       # none / auto / deepseek
 
     @field_validator("content")
     @classmethod

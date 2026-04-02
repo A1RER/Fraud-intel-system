@@ -143,18 +143,7 @@ CORS_ORIGINS: list = [
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 REDIS_TASK_TTL = 60 * 60 * 24   # 任务结果保留 24 小时后自动过期
 
-# ─── Gemini AI 配置 ─────────────────────────────────────────────
-# 优先读 .env / 环境变量，其次读 Streamlit Cloud Secrets
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-if not GEMINI_API_KEY:
-    try:
-        import streamlit as st
-        GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-    except Exception:
-        pass
-GEMINI_MODEL   = "gemini-2.5-flash"      # 速度快、支持视觉、成本低
-
-# ─── DeepSeek AI 配置（备选，Gemini 限流时自动切换）──────────
+# ─── DeepSeek AI 配置 ──────────────────────────────────────────
 DEEPSEEK_API_KEY  = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL    = "deepseek-chat"        # DeepSeek V3，中文极强
