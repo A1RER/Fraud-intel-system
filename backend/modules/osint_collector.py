@@ -296,6 +296,8 @@ class SentimentCollector:
     _NEG_KEYWORDS = ["诈骗", "骗局", "投诉", "跑路", "无法提现", "骗子", "举报", "曝光"]
     _cache: dict = {}          # {domain: (snippets, neg_count, timestamp)}
     _TTL = 6 * 3600            # 同一域名缓存 6 小时
+    _lock: Optional[asyncio.Lock] = None   # 全局串行锁，防止并发打爆 Bing
+    _INTERVAL = 1.5            # 两次 Bing 请求之间的最小间隔（秒）
 
     @classmethod
     async def collect(cls, domain: str) -> dict:
@@ -338,7 +340,6 @@ class SentimentCollector:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
 
-        # 两个查询并发发出，不再串行等待
         queries = [
             domain,
             f"{domain} 诈骗 OR 投诉 OR 骗局 OR 跑路",
@@ -368,8 +369,15 @@ class SentimentCollector:
             except Exception as e:
                 logger.warning(f"Bing 搜索失败 [query={query}]: {e}")
 
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=6) as client:
-            await asyncio.gather(*[_search_one(client, q) for q in queries])
+        # 全局锁确保同一时刻只有一个 Bing 请求序列在执行
+        if cls._lock is None:
+            cls._lock = asyncio.Lock()
+
+        async with cls._lock:
+            async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=6) as client:
+                for query in queries:
+                    await _search_one(client, query)
+                    await asyncio.sleep(cls._INTERVAL)  # 每次请求后强制间隔
 
         logger.info(f"[舆情] {domain} 采集到 {len(all_snippets)} 条摘要，负面 {neg_count} 条")
         return all_snippets, neg_count
