@@ -190,11 +190,21 @@ class SSLIntelCollector:
 class GeoIPCollector:
     """服务器 IP 地理信息采集"""
 
-    @staticmethod
-    async def collect(ip: str) -> dict:
+    _cache: dict = {}          # {ip: (result, timestamp)}
+    _TTL = 24 * 3600           # 同一 IP 缓存 24 小时
+
+    @classmethod
+    async def collect(cls, ip: str) -> dict:
         result = {"server_country": None, "server_isp": None, "is_cdn": False}
         if not ip:
             return result
+
+        import time
+        cached = cls._cache.get(ip)
+        if cached and time.time() - cached[1] < cls._TTL:
+            logger.debug(f"[GeoIP] 命中缓存 [{ip}]")
+            return cached[0]
+
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.get(
@@ -209,6 +219,7 @@ class GeoIPCollector:
                     cdn_keywords = ["cloudflare", "fastly", "akamai", "cdn", "cloudfront"]
                     if any(k in org for k in cdn_keywords):
                         result["is_cdn"] = True
+            cls._cache[ip] = (result, time.time())
         except Exception as e:
             logger.warning(f"GeoIP 查询失败 [{ip}]: {e}")
         return result
@@ -283,6 +294,8 @@ class SentimentCollector:
     """外部舆情采集 —— 通过 Bing 搜索获取真实互联网舆情"""
 
     _NEG_KEYWORDS = ["诈骗", "骗局", "投诉", "跑路", "无法提现", "骗子", "举报", "曝光"]
+    _cache: dict = {}          # {domain: (snippets, neg_count, timestamp)}
+    _TTL = 6 * 3600            # 同一域名缓存 6 小时
 
     @classmethod
     async def collect(cls, domain: str) -> dict:
@@ -296,7 +309,16 @@ class SentimentCollector:
             result["blacklist_hit"] = True
             result["complaint_count"] = 999
 
+        import time
+        cached = cls._cache.get(domain)
+        if cached and time.time() - cached[2] < cls._TTL:
+            logger.debug(f"[舆情] 命中缓存 [{domain}]")
+            result["search_snippets"] = cached[0]
+            result["complaint_count"] = max(result["complaint_count"], cached[1])
+            return result
+
         snippets, neg_count = await cls._bing_search(domain)
+        cls._cache[domain] = (snippets, neg_count, time.time())
         result["search_snippets"] = snippets
         result["complaint_count"] = max(result["complaint_count"], neg_count)
         return result
