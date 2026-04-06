@@ -62,7 +62,7 @@ def feat_ip_cdn_abuse(is_cdn: bool, redirect_count: int) -> float:
     return min(score, 1.0)
 
 def feat_resource_anomaly(errors: int, total: int) -> float:
-    if total == 0: return 0.3
+    if total == 0: return 0.0   # 无采集数据，不视为异常（httpx 模式下始终为 0）
     rate = errors / total
     if rate > 0.5: return 1.0
     if rate > 0.3: return 0.7

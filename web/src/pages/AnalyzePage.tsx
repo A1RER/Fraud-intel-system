@@ -15,6 +15,7 @@ export default function AnalyzePage() {
   const [result, setResult]           = useState<FraudAnalysisResponse | null>(null)
   const [error, setError]             = useState<string | null>(null)
 
+  const [aiEnabled, setAiEnabled]   = useState(false)
   const [aiLoading, setAiLoading] = useState<string | null>(null)
   const [aiResult, setAiResult]     = useState<AIAnalysis | null>(null)
 
@@ -34,7 +35,11 @@ export default function AnalyzePage() {
     setAiResult(null)
 
     try {
-      const body: Record<string, unknown> = { input_type: inputType, content: main }
+      const body: Record<string, unknown> = {
+        input_type: inputType,
+        content: main,
+        ai_engine: aiEnabled ? 'deepseek' : 'none',
+      }
       if (inputType !== 'company' && companyName.trim()) body.company_name = companyName.trim()
       if (inputType !== 'url' && urlField.trim()) body.url = urlField.trim()
 
@@ -137,6 +142,18 @@ export default function AnalyzePage() {
               className="bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder-slate-600 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-50" />
           </div>
         )}
+        <div className="flex items-center justify-between">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={aiEnabled}
+              onChange={e => setAiEnabled(e.target.checked)}
+              disabled={loading}
+              className="w-4 h-4 accent-blue-500"
+            />
+            <span className="text-slate-400 text-sm">启用 AI 深度分析（DeepSeek，耗时较长）</span>
+          </label>
+        </div>
         <button onClick={handleAnalyze} disabled={loading || !hasContent}
           className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-600 text-white py-3 rounded-lg font-medium transition-colors cursor-pointer text-sm">
           {loading ? '⏳ 正在分析中...' : '▶ 开始识别'}
